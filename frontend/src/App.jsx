@@ -13,26 +13,108 @@ import {
   DollarSign, 
   Calculator,
   ChevronRight,
-  Sparkles
+  Sparkles,
+  LogOut
 } from 'lucide-react';
 
 function App() {
   // Freighter Wallet Address State
-  const [walletAddress, setWalletAddress] = useState('GBX26NZIG7FZZ6RI2J4ZNSONPQUATPHK3ABOWSI2O673F3GEG26MNKUX');
+  const [walletAddress, setWalletAddress] = useState('');
   const [isEditingWallet, setIsEditingWallet] = useState(false);
-  const [walletInputVal, setWalletInputVal] = useState('GBX26NZIG7FZZ6RI2J4ZNSONPQUATPHK3ABOWSI2O673F3GEG26MNKUX');
+  const [walletInputVal, setWalletInputVal] = useState('');
+  const [landingError, setLandingError] = useState('');
   
+  // Network Selection
+  const [network, setNetwork] = useState('testnet'); // Default to testnet for safe sandboxing
+  const [isLoadingBalance, setIsLoadingBalance] = useState(false);
+  const [balanceError, setBalanceError] = useState('');
+
   // App States
-  const [walletConnected, setWalletConnected] = useState(true);
+  const [walletConnected, setWalletConnected] = useState(false);
   const [isAutosaveActive, setIsAutosaveActive] = useState(true);
   const [activeTab, setActiveTab] = useState('worker'); // 'worker' | 'client'
   
   // Wallet Balances (Freelancer Profile)
   const [balances, setBalances] = useState({
-    xlm: 1450,
-    usdc: 320,
-    php: 18240, // 320 USDC * 57 PHP
+    xlm: 0,
+    usdc: 0,
+    php: 0,
   });
+
+  // Fetch Live Balance from Stellar Horizon Ledger
+  useEffect(() => {
+    const fetchBalance = async () => {
+      const cleanAddress = walletAddress.trim();
+      if (!cleanAddress || cleanAddress.length < 40) return;
+      
+      // Sandbox Wallet Address check - initialize mock assets only once so paid invoices are persistent
+      if (cleanAddress === 'GBDEMOWORKERREMOTEPAID2026KWAGEESANDBOX4736KUX') {
+        setIsLoadingBalance(false);
+        setBalanceError('');
+        setBalances(prev => {
+          if (prev.xlm === 0 && prev.usdc === 0) {
+            return {
+              xlm: 1450,
+              usdc: 320,
+              php: 18240 // 320 USDC * 57 PHP
+            };
+          }
+          return prev;
+        });
+        return;
+      }
+      
+      setIsLoadingBalance(true);
+      setBalanceError('');
+      
+      const horizonUrl = network === 'mainnet' 
+        ? `https://horizon.stellar.org/accounts/${cleanAddress}`
+        : `https://horizon-testnet.stellar.org/accounts/${cleanAddress}`;
+
+      try {
+        const response = await fetch(horizonUrl);
+        if (!response.ok) {
+          if (response.status === 404) {
+            throw new Error(`Account not created/funded on ${network.toUpperCase()} yet.`);
+          }
+          throw new Error('Could not fetch account from Horizon server.');
+        }
+        
+        const data = await response.json();
+        
+        let xlmBalance = 0;
+        let usdcBalance = 0;
+
+        if (data.balances && Array.isArray(data.balances)) {
+          data.balances.forEach(b => {
+            if (b.asset_type === 'native') {
+              xlmBalance = parseFloat(b.balance);
+            } else if (b.asset_code === 'USDC') {
+              usdcBalance = parseFloat(b.balance);
+            }
+          });
+        }
+
+        setBalances({
+          xlm: xlmBalance,
+          usdc: usdcBalance,
+          php: usdcBalance > 0 ? usdcBalance * 57 : xlmBalance * 0.11 * 57 // Fallback using mock XLM price if no USDC
+        });
+      } catch (err) {
+        setBalanceError(err.message);
+        // Reset balances on error so user doesn't see outdated info
+        setBalances({
+          xlm: 0,
+          usdc: 0,
+          php: 0
+        });
+      } finally {
+        setIsLoadingBalance(false);
+      }
+    };
+
+    fetchBalance();
+  }, [walletAddress, network]);
 
   // Allocation Percentages state (Must add up to 100%)
   const [allocations, setAllocations] = useState({
@@ -64,6 +146,7 @@ function App() {
       amountUsd: 600,
       amountXlm: 2400,
       status: 'paid',
+      recipient: 'GBDEMOWORKERREMOTEPAID2026KWAGEESANDBOX4736KUX',
       date: '2026-05-18'
     },
     {
@@ -73,6 +156,7 @@ function App() {
       amountUsd: 450,
       amountXlm: 1800,
       status: 'pending',
+      recipient: 'GBDEMOWORKERREMOTEPAID2026KWAGEESANDBOX4736KUX',
       date: '2026-05-20'
     }
   ]);
@@ -129,6 +213,7 @@ function App() {
       amountUsd: Number(newInvAmount),
       amountXlm: Number(newInvAmount * 4), // Mock exchange rate: 1 USD = 4 XLM
       status: 'pending',
+      recipient: walletAddress, // Dynamically maps to currently connected account!
       date: new Date().toISOString().split('T')[0]
     };
 
@@ -201,6 +286,96 @@ function App() {
     }, 450);
   };
 
+  // Handle landing connection submit
+  const handleConnectSubmit = (e) => {
+    e.preventDefault();
+    const addr = walletInputVal.trim();
+    if (!addr) {
+      setLandingError('Please enter a Stellar address.');
+      return;
+    }
+    if (!addr.startsWith('G') || addr.length < 30) {
+      setLandingError('Invalid Stellar address. Public keys must start with "G" and be at least 30 characters long.');
+      return;
+    }
+    setLandingError('');
+    setWalletAddress(addr);
+    setWalletConnected(true);
+  };
+
+  // Handle sandbox launch
+  const handleSandboxLaunch = () => {
+    setLandingError('');
+    setWalletAddress('GBDEMOWORKERREMOTEPAID2026KWAGEESANDBOX4736KUX');
+    setWalletInputVal('GBDEMOWORKERREMOTEPAID2026KWAGEESANDBOX4736KUX');
+    setNetwork('mainnet'); // Sandbox works on simulated mainnet asset state
+    setWalletConnected(true);
+  };
+
+  if (!walletAddress) {
+    return (
+      <div className="landing-container">
+        <div className="landing-card">
+          <div className="landing-brand">
+            <div className="landing-logo-container">
+              <Sparkles size={36} className="text-white" />
+            </div>
+            <h1 className="landing-title">Kwagee</h1>
+            <div className="landing-subtitle">On-Chain Self-Budgeting</div>
+          </div>
+          
+          <p className="landing-description">
+            Kwagee bridges Stellar's high-speed payment rails with automated, smart split-budgeting for global remote freelancers. Route your remote stablecoin payroll instantly to savings, taxes, bills, and welfare.
+          </p>
+
+          <form onSubmit={handleConnectSubmit} className="landing-form">
+            <div className="landing-input-group">
+              <input 
+                type="text"
+                placeholder="Paste your Stellar Public Address (starts with G)"
+                value={walletInputVal}
+                onChange={(e) => setWalletInputVal(e.target.value)}
+                className="landing-input"
+              />
+              <select
+                value={network}
+                onChange={(e) => setNetwork(e.target.value)}
+                className="landing-select"
+              >
+                <option value="testnet">Testnet</option>
+                <option value="mainnet">Mainnet</option>
+              </select>
+            </div>
+
+            {landingError && (
+              <div className="validation-warning" style={{ width: '100%', justifyContent: 'center', marginBottom: '10px' }}>
+                <ShieldAlert size={16} />
+                <span>{landingError}</span>
+              </div>
+            )}
+
+            <button type="submit" className="landing-btn-submit">
+              <Wallet size={18} />
+              <span>Connect Freighter Wallet</span>
+            </button>
+          </form>
+
+          <div className="landing-divider">OR</div>
+
+          <div className="landing-sandbox-box" onClick={handleSandboxLaunch}>
+            <div className="landing-sandbox-title">
+              <Sparkles size={16} />
+              <span>Launch with Simulated Sandbox Wallet</span>
+            </div>
+            <p className="landing-sandbox-desc">
+              Don't have a wallet? Instantly boot into our pre-populated mock ledger sandbox containing test assets ($320 USDC / 1450 XLM) and pending remote contract invoices.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* HEADER SECTION */}
@@ -214,57 +389,113 @@ function App() {
             <div className="logo-sub">On-Chain Self-Budgeting</div>
           </div>
         </div>
-        
-        {isEditingWallet ? (
-          <div className="wallet-badge-edit" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <input 
-              type="text"
-              value={walletInputVal}
-              onChange={(e) => setWalletInputVal(e.target.value)}
-              onBlur={() => {
-                if (walletInputVal.trim().length >= 8) {
-                  setWalletAddress(walletInputVal.trim());
-                }
-                setIsEditingWallet(false);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* Network Selection Selector */}
+          <select 
+            value={network}
+            onChange={(e) => setNetwork(e.target.value)}
+            style={{
+              background: 'rgba(157, 78, 221, 0.12)',
+              border: '1px solid var(--border-light)',
+              color: 'var(--purple-light)',
+              borderRadius: '12px',
+              padding: '6px 12px',
+              fontSize: '12px',
+              fontWeight: 700,
+              fontFamily: 'var(--font-outfit)',
+              outline: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            <option value="testnet" style={{ background: '#0b071a' }}>Testnet</option>
+            <option value="mainnet" style={{ background: '#0b071a' }}>Mainnet</option>
+          </select>
+
+          {isEditingWallet ? (
+            <div className="wallet-badge-edit" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <input 
+                type="text"
+                value={walletInputVal}
+                onChange={(e) => setWalletInputVal(e.target.value)}
+                onBlur={() => {
                   if (walletInputVal.trim().length >= 8) {
                     setWalletAddress(walletInputVal.trim());
                   }
                   setIsEditingWallet(false);
-                }
-              }}
-              placeholder="Paste G... address"
-              className="form-input"
-              style={{
-                padding: '4px 8px',
-                fontSize: '11px',
-                fontFamily: 'monospace',
-                width: '180px',
-                background: 'rgba(10, 6, 22, 0.8)',
-                border: '1px solid var(--primary-glow)',
-                color: '#fff',
-                borderRadius: '8px',
-              }}
-              autoFocus
-            />
-          </div>
-        ) : (
-          <div 
-            className="wallet-badge" 
-            onClick={() => { 
-              setIsEditingWallet(true); 
-              setWalletInputVal(walletAddress); 
-            }} 
-            title="Click to edit and test your own wallet address"
-          >
-            <div className="wallet-dot"></div>
-            <span className="wallet-address">
-              Freighter: {walletAddress.slice(0, 6)}...{walletAddress.slice(-6)}
-            </span>
-          </div>
-        )}
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    if (walletInputVal.trim().length >= 8) {
+                      setWalletAddress(walletInputVal.trim());
+                    }
+                    setIsEditingWallet(false);
+                  }
+                }}
+                placeholder="Paste G... address"
+                className="form-input"
+                style={{
+                  padding: '4px 8px',
+                  fontSize: '11px',
+                  fontFamily: 'monospace',
+                  width: '180px',
+                  background: 'rgba(10, 6, 22, 0.8)',
+                  border: '1px solid var(--primary-glow)',
+                  color: '#fff',
+                  borderRadius: '8px',
+                }}
+                autoFocus
+              />
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div 
+                className="wallet-badge" 
+                onClick={() => { 
+                  setIsEditingWallet(true); 
+                  setWalletInputVal(walletAddress); 
+                }} 
+                title="Click to edit and test your own wallet address"
+              >
+                <div className="wallet-dot" style={{ backgroundColor: isLoadingBalance ? '#a020f0' : (balanceError ? '#ff9f1c' : '#00f5d4') }}></div>
+                <span className="wallet-address">
+                  Freighter: {walletAddress.slice(0, 6)}...{walletAddress.slice(-6)}
+                </span>
+              </div>
+              
+              <button 
+                onClick={() => {
+                  setWalletAddress('');
+                  setWalletInputVal('');
+                  setBalances({ xlm: 0, usdc: 0, php: 0 });
+                }}
+                title="Disconnect Wallet"
+                style={{
+                  background: 'rgba(255, 0, 85, 0.1)',
+                  border: '1px solid rgba(255, 0, 85, 0.25)',
+                  color: '#ff0055',
+                  borderRadius: '12px',
+                  width: '34px',
+                  height: '34px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  transition: 'var(--transition-smooth)'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 0, 85, 0.2)';
+                  e.currentTarget.style.borderColor = '#ff0055';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 0, 85, 0.1)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 0, 85, 0.25)';
+                }}
+              >
+                <LogOut size={14} />
+              </button>
+            </div>
+          )}
+        </div>
       </header>
 
       {/* DASHBOARD GRID */}
@@ -275,6 +506,47 @@ function App() {
             <Calculator size={20} className="text-purple-accent" />
             <span>Preprogrammed Allocation Visualizer</span>
           </div>
+
+          {/* Live Balance Warnings & Friendbot testnet off-ramping options */}
+          {balanceError && (
+            <div className="validation-warning" style={{ margin: '0 0 20px 0', border: '1px solid rgba(255, 159, 28, 0.3)' }}>
+              <ShieldAlert size={16} />
+              <span style={{ fontSize: '11px' }}>{balanceError}</span>
+              {network === 'testnet' && (
+                <button 
+                  onClick={async () => {
+                    setIsLoadingBalance(true);
+                    try {
+                      const res = await fetch(`https://friendbot.stellar.org/?addr=${walletAddress.trim()}`);
+                      if (res.ok) {
+                        setWalletAddress(prev => prev + ' ');
+                        setTimeout(() => {
+                          setWalletAddress(prev => prev.trim());
+                        }, 50);
+                      }
+                    } catch (e) {
+                      setBalanceError('Friendbot connection failed.');
+                    } finally {
+                      setIsLoadingBalance(false);
+                    }
+                  }}
+                  style={{
+                    marginLeft: 'auto',
+                    background: 'var(--success-color)',
+                    border: 'none',
+                    color: '#06040d',
+                    padding: '4px 10px',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                    fontWeight: 800
+                  }}
+                >
+                  {isLoadingBalance ? 'Funding...' : 'Fund 10,000 XLM'}
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Core Balances Hub */}
           <div className="balance-strip">
@@ -620,10 +892,10 @@ function App() {
               <div className="client-sandbox">
                 <div className="sandbox-header">
                   <Coins size={14} />
-                  <span>Your Invoices ledger ({invoices.length})</span>
+                  <span>Your Invoices ledger ({invoices.filter(i => i.recipient === walletAddress).length})</span>
                 </div>
 
-                {invoices.map((invoice) => (
+                {invoices.filter(i => i.recipient === walletAddress).map((invoice) => (
                   <div key={invoice.id} className={`invoice-item ${invoice.status}`}>
                     <div className="invoice-main-info">
                       <div>
@@ -670,7 +942,7 @@ function App() {
               </p>
 
               <div className="client-sandbox" style={{ border: 'none', paddingTop: 0, marginTop: 0 }}>
-                {invoices.filter(i => i.status === 'pending').length === 0 ? (
+                {invoices.filter(i => i.recipient === walletAddress && i.status === 'pending').length === 0 ? (
                   <div style={{
                     padding: '30px 20px',
                     textAlign: 'center',
@@ -684,7 +956,7 @@ function App() {
                     <p style={{ fontSize: '11px' }}>Create a new invoice in the Freelancer tab to simulate another payment cycle.</p>
                   </div>
                 ) : (
-                  invoices.filter(i => i.status === 'pending').map((invoice) => (
+                  invoices.filter(i => i.recipient === walletAddress && i.status === 'pending').map((invoice) => (
                     <div key={invoice.id} className="invoice-item pending">
                       <div className="invoice-main-info">
                         <div>
