@@ -25,6 +25,7 @@ function App() {
   const [isEditingWallet, setIsEditingWallet] = useState(false);
   const [walletInputVal, setWalletInputVal] = useState('');
   const [landingError, setLandingError] = useState('');
+  const [isSandboxMode, setIsSandboxMode] = useState(false);
   
   // Network Selection
   const [network, setNetwork] = useState('testnet'); // Default to testnet
@@ -77,7 +78,7 @@ function App() {
   useEffect(() => {
     const fetchBalance = async () => {
       const cleanAddress = walletAddress.trim();
-      if (!cleanAddress || cleanAddress.length < 30) return;
+      if (!cleanAddress || cleanAddress.length < 30 || isSandboxMode) return;
       
       setIsLoadingBalance(true);
       setBalanceError('');
@@ -143,7 +144,7 @@ function App() {
   useEffect(() => {
     const fetchHistory = async () => {
       const cleanAddress = walletAddress.trim();
-      if (!cleanAddress || cleanAddress.length < 30) return;
+      if (!cleanAddress || cleanAddress.length < 30 || isSandboxMode) return;
 
       setIsLoadingHistory(true);
       const horizonUrl = network === 'mainnet'
@@ -172,6 +173,13 @@ function App() {
 
     fetchHistory();
   }, [walletAddress, network]);
+
+  // Clamp budgetAmount in sandbox mode when balances.usdc changes
+  useEffect(() => {
+    if (isSandboxMode && budgetAmount > balances.usdc) {
+      setBudgetAmount(balances.usdc);
+    }
+  }, [balances.usdc, isSandboxMode, budgetAmount]);
 
   // Calculate sum of micro-allocations
   const totalAllocationPct = allocations.gov + allocations.tax + allocations.bills + allocations.spendable;
@@ -288,13 +296,49 @@ function App() {
     setWalletAddress(addr);
   };
 
-  // Handle sandbox launch with a clean testnet address
+  // Handle sandbox launch with simulated data and editable controls
   const handleSandboxLaunch = () => {
     setLandingError('');
-    const sandboxAddr = 'GC2WNMONVHE5XWIUIMSAVVZ7NYKGWMCMHSI5JP24ZIH7FRTJ3I24IRJG';
-    setWalletAddress(sandboxAddr);
-    setWalletInputVal(sandboxAddr);
-    setNetwork('testnet');
+    setIsSandboxMode(true);
+    setWalletAddress('SANDBOX_WALLET');
+    setBalances({
+      xlm: 1250.50,
+      usdc: 850.00,
+      php: 850.00 * 57
+    });
+    setBudgetAmount(350.00);
+    setTransactions([
+      {
+        id: 'sb_tx_1',
+        type: 'payment',
+        amount: '125.0000000',
+        asset_type: 'credit_alphanum4',
+        asset_code: 'USDC',
+        from: 'GCSANDBOXRECIPIENT11234567890',
+        to: 'SANDBOX_WALLET',
+        created_at: new Date(Date.now() - 3600000 * 2).toISOString(), // 2 hours ago
+        transaction_hash: '5f9b8c7d6a5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c'
+      },
+      {
+        id: 'sb_tx_2',
+        type: 'payment',
+        amount: '45.0000000',
+        asset_type: 'native',
+        from: 'SANDBOX_WALLET',
+        to: 'GCSANDBOXRECIPIENT22345678901',
+        created_at: new Date(Date.now() - 3600000 * 24).toISOString(), // 1 day ago
+        transaction_hash: 'e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8'
+      },
+      {
+        id: 'sb_tx_3',
+        type: 'create_account',
+        starting_balance: '1000.0000000',
+        funder: 'GCSANDBOXSPONSOR99999999999',
+        account: 'SANDBOX_WALLET',
+        created_at: new Date(Date.now() - 3600000 * 48).toISOString(), // 2 days ago
+        transaction_hash: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2'
+      }
+    ]);
   };
 
   // Connect Account Layout
@@ -351,10 +395,10 @@ function App() {
           <div className="landing-sandbox-box" onClick={handleSandboxLaunch}>
             <div className="landing-sandbox-title">
               <Sparkles size={16} />
-              <span>Launch with Sandbox Wallet Address</span>
+              <span>Launch with Sandbox Wallet</span>
             </div>
             <p className="landing-sandbox-desc">
-              Instantly view the dashboard using a standard Stellar testnet address (GC2WNMON...) containing live ledger balances.
+              Instantly launch a local visual sandbox profile to test out and custom configure the budgeting allocator.
             </p>
           </div>
         </div>
@@ -379,27 +423,81 @@ function App() {
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {/* Network Selection Selector */}
-          <select 
-            value={network}
-            onChange={(e) => setNetwork(e.target.value)}
-            style={{
-              background: 'rgba(157, 78, 221, 0.12)',
-              border: '1px solid var(--border-light)',
-              color: 'var(--purple-light)',
-              borderRadius: '12px',
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 700,
-              fontFamily: 'var(--font-outfit)',
-              outline: 'none',
-              cursor: 'pointer'
-            }}
-          >
-            <option value="testnet" style={{ background: '#0b071a' }}>Testnet</option>
-            <option value="mainnet" style={{ background: '#0b071a' }}>Mainnet</option>
-          </select>
+          {!isSandboxMode && (
+            <select 
+              value={network}
+              onChange={(e) => setNetwork(e.target.value)}
+              style={{
+                background: 'rgba(157, 78, 221, 0.12)',
+                border: '1px solid var(--border-light)',
+                color: 'var(--purple-light)',
+                borderRadius: '12px',
+                padding: '6px 12px',
+                fontSize: '12px',
+                fontWeight: 700,
+                fontFamily: 'var(--font-outfit)',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="testnet" style={{ background: '#0b071a' }}>Testnet</option>
+              <option value="mainnet" style={{ background: '#0b071a' }}>Mainnet</option>
+            </select>
+          )}
 
-          {isEditingWallet ? (
+          {isSandboxMode ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div 
+                className="wallet-badge" 
+                style={{
+                  cursor: 'default',
+                  borderColor: 'rgba(157, 78, 221, 0.4)',
+                  background: 'linear-gradient(135deg, rgba(157, 78, 221, 0.15) 0%, rgba(10, 6, 22, 0.6) 100%)',
+                  boxShadow: '0 0 10px rgba(157, 78, 221, 0.2)'
+                }}
+              >
+                <div className="wallet-dot" style={{ backgroundColor: '#9d4edd', boxShadow: '0 0 8px #9d4edd' }}></div>
+                <span className="wallet-address" style={{ color: 'var(--purple-light)', fontWeight: 800 }}>
+                  SANDBOX MODE ACTIVE
+                </span>
+              </div>
+              
+              <button 
+                onClick={() => {
+                  setWalletAddress('');
+                  setWalletInputVal('');
+                  setBalances({ xlm: 0, usdc: 0, php: 0 });
+                  setTransactions([]);
+                  setBudgetAmount(0);
+                  setIsSandboxMode(false);
+                }}
+                title="Exit Sandbox"
+                style={{
+                  background: 'rgba(255, 0, 85, 0.1)',
+                  border: '1px solid rgba(255, 0, 85, 0.25)',
+                  color: '#ff0055',
+                  borderRadius: '12px',
+                  width: '34px',
+                  height: '34px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  transition: 'var(--transition-smooth)'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 0, 85, 0.2)';
+                  e.currentTarget.style.borderColor = '#ff0055';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 0, 85, 0.1)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 0, 85, 0.25)';
+                }}
+              >
+                <LogOut size={14} />
+              </button>
+            </div>
+          ) : isEditingWallet ? (
             <div className="wallet-badge-edit" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <input 
                 type="text"
@@ -457,6 +555,7 @@ function App() {
                   setBalances({ xlm: 0, usdc: 0, php: 0 });
                   setTransactions([]);
                   setBudgetAmount(0);
+                  setIsSandboxMode(false);
                 }}
                 title="Disconnect Wallet"
                 style={{
@@ -579,10 +678,10 @@ function App() {
             <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
               <div className="panel-title">
                 <Lock size={22} style={{ color: 'var(--success-color)' }} />
-                <span>Secure Personal Savings Vault (Direct Address Balance)</span>
+                <span>Secure Personal Savings Vault {isSandboxMode ? '(Direct Sandbox Balance)' : '(Direct Address Balance)'}</span>
               </div>
 
-              {balanceError && (
+              {!isSandboxMode && balanceError && (
                 <div className="validation-warning" style={{ border: '1px solid rgba(255, 159, 28, 0.3)' }}>
                   <ShieldAlert size={16} />
                   <span style={{ fontSize: '11px' }}>{balanceError}</span>
@@ -684,80 +783,188 @@ function App() {
                   <ShieldAlert size={16} className="text-success-color" />
                   Untouchable Base Rule
                 </strong>
-                The aggregate balance displayed above corresponds strictly to your live, on-chain public address holdings. The Kwagee dashboard treats this core value as safe and untouched from daily spend obligations until you explicitly choose to allocate an amount to budget.
+                The aggregate balance displayed above corresponds strictly to your {isSandboxMode ? 'customized sandbox wallet balances' : 'live, on-chain public address holdings'}. The Kwagee dashboard treats this core value as safe and untouched from daily spend obligations until you explicitly choose to allocate an amount to budget.
               </div>
             </div>
 
-            <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div className="panel-title">
-                <Wallet size={20} className="text-purple-accent" />
-                <span>Stellar Address Information</span>
-              </div>
+            {isSandboxMode ? (
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div className="panel-title">
+                  <Sparkles size={20} className="text-purple-accent" />
+                  <span>Sandbox Wallet Editor</span>
+                </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-light)', padding: '16px', borderRadius: '14px' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Connected Public Key
-                  </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                    Configure your local simulated sandbox balances. All figures will instantly reflect across your vault calculations, budget allocations, and visual transfer limitations.
+                  </p>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ color: 'var(--text-secondary)', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase' }}>
+                      Simulated USDC Balance (USD)
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                      <input 
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={balances.usdc}
+                        onChange={(e) => {
+                          const newUsdc = Math.max(0, parseFloat(e.target.value) || 0);
+                          setBalances(prev => ({
+                            ...prev,
+                            usdc: newUsdc,
+                            php: newUsdc * 57
+                          }));
+                        }}
+                        className="form-input"
+                        style={{
+                          background: 'rgba(255,255,255,0.05)',
+                          border: '1px solid var(--border-light)',
+                          color: '#fff',
+                          borderRadius: '12px',
+                          padding: '10px 14px',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          fontFamily: 'var(--font-outfit)',
+                          flex: 1
+                        }}
+                      />
+                      <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--purple-light)' }}>USDC</span>
+                    </div>
+                  </div>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ color: 'var(--text-secondary)', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase' }}>
+                      Simulated XLM Balance
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                      <input 
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={balances.xlm}
+                        onChange={(e) => {
+                          const newXlm = Math.max(0, parseFloat(e.target.value) || 0);
+                          setBalances(prev => ({
+                            ...prev,
+                            xlm: newXlm
+                          }));
+                        }}
+                        className="form-input"
+                        style={{
+                          background: 'rgba(255,255,255,0.05)',
+                          border: '1px solid var(--border-light)',
+                          color: '#fff',
+                          borderRadius: '12px',
+                          padding: '10px 14px',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          fontFamily: 'var(--font-outfit)',
+                          flex: 1
+                        }}
+                      />
+                      <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--success-color)' }}>XLM</span>
+                    </div>
+                  </div>
+
                   <div style={{ 
-                    fontFamily: 'monospace', 
-                    fontSize: '12px', 
-                    color: '#fff', 
-                    wordBreak: 'break-all', 
-                    marginTop: '6px',
-                    background: 'rgba(255,255,255,0.03)',
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(255,255,255,0.05)'
+                    background: 'rgba(157, 78, 221, 0.05)', 
+                    border: '1px solid rgba(157, 78, 221, 0.15)', 
+                    padding: '12px', 
+                    borderRadius: '12px',
+                    fontSize: '11px',
+                    color: 'var(--text-secondary)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                    marginTop: '6px'
                   }}>
-                    {walletAddress}
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Simulated PHP Value:</span>
+                      <span style={{ color: 'var(--success-color)', fontWeight: 700 }}>
+                        ₱{(balances.usdc * 57).toLocaleString(undefined, { maximumFractionDigits: 0 })} PHP
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Off-Ramp Conversion Rate:</span>
+                      <span>1 USDC ≈ 57.00 PHP</span>
+                    </div>
                   </div>
                 </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 8px' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>Horizon Ledger Node:</span>
-                  <span style={{ color: 'var(--purple-light)', fontWeight: 600 }}>
-                    {network === 'mainnet' ? 'Stellar Horizon (Mainnet)' : 'Stellar Horizon (Testnet)'}
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 8px' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>Off-Ramp Rate:</span>
-                  <span style={{ color: 'var(--success-color)', fontWeight: 700 }}>
-                    1 USDC ≈ 57.00 PHP
-                  </span>
-                </div>
-
-                {network === 'testnet' && (
-                  <button 
-                    onClick={async () => {
-                      setIsLoadingBalance(true);
-                      try {
-                        const res = await fetch(`https://friendbot.stellar.org/?addr=${walletAddress.trim()}`);
-                        if (res.ok) {
-                          alert("Account successfully funded with 10,000 testnet XLM!");
-                          // Trigger reload by slightly changing state
-                          setWalletAddress(prev => prev + ' ');
-                          setTimeout(() => setWalletAddress(prev => prev.trim()), 50);
-                        } else {
-                          alert("Friendbot rate limited or failed. Try again in a minute.");
-                        }
-                      } catch (e) {
-                        alert("Friendbot funding failed.");
-                      } finally {
-                        setIsLoadingBalance(false);
-                      }
-                    }}
-                    disabled={isLoadingBalance}
-                    className="btn-primary"
-                    style={{ marginTop: '10px' }}
-                  >
-                    <RefreshCw size={14} className={isLoadingBalance ? "animate-spin" : ""} />
-                    <span>{isLoadingBalance ? "Requesting..." : "Get 10,000 Testnet XLM (Friendbot)"}</span>
-                  </button>
-                )}
               </div>
-            </div>
+            ) : (
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div className="panel-title">
+                  <Wallet size={20} className="text-purple-accent" />
+                  <span>Stellar Address Information</span>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-light)', padding: '16px', borderRadius: '14px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                      Connected Public Key
+                    </span>
+                    <div style={{ 
+                      fontFamily: 'monospace', 
+                      fontSize: '12px', 
+                      color: '#fff', 
+                      wordBreak: 'break-all', 
+                      marginTop: '6px',
+                      background: 'rgba(255,255,255,0.03)',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(255,255,255,0.05)'
+                    }}>
+                      {walletAddress}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 8px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Horizon Ledger Node:</span>
+                    <span style={{ color: 'var(--purple-light)', fontWeight: 600 }}>
+                      {network === 'mainnet' ? 'Stellar Horizon (Mainnet)' : 'Stellar Horizon (Testnet)'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 8px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Off-Ramp Rate:</span>
+                    <span style={{ color: 'var(--success-color)', fontWeight: 700 }}>
+                      1 USDC ≈ 57.00 PHP
+                    </span>
+                  </div>
+
+                  {network === 'testnet' && (
+                    <button 
+                      onClick={async () => {
+                        setIsLoadingBalance(true);
+                        try {
+                          const res = await fetch(`https://friendbot.stellar.org/?addr=${walletAddress.trim()}`);
+                          if (res.ok) {
+                            alert("Account successfully funded with 10,000 testnet XLM!");
+                            // Trigger reload by slightly changing state
+                            setWalletAddress(prev => prev + ' ');
+                            setTimeout(() => setWalletAddress(prev => prev.trim()), 50);
+                          } else {
+                            alert("Friendbot rate limited or failed. Try again in a minute.");
+                          }
+                        } catch (e) {
+                          alert("Friendbot funding failed.");
+                        } finally {
+                          setIsLoadingBalance(false);
+                        }
+                      }}
+                      disabled={isLoadingBalance}
+                      className="btn-primary"
+                      style={{ marginTop: '10px' }}
+                    >
+                      <RefreshCw size={14} className={isLoadingBalance ? "animate-spin" : ""} />
+                      <span>{isLoadingBalance ? "Requesting..." : "Get 10,000 Testnet XLM (Friendbot)"}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -792,9 +999,12 @@ function App() {
                   <input 
                     type="range"
                     min="0"
-                    max={balances.usdc > 0 ? Math.max(balances.usdc, budgetAmount) : 1000}
+                    max={isSandboxMode ? balances.usdc : (balances.usdc > 0 ? Math.max(balances.usdc, budgetAmount) : 1000)}
                     value={budgetAmount}
-                    onChange={(e) => setBudgetAmount(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setBudgetAmount(isSandboxMode ? Math.min(val, balances.usdc) : val);
+                    }}
                     style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.1)', outline: 'none', borderRadius: '3px', cursor: 'pointer' }}
                   />
                 </div>
@@ -802,8 +1012,12 @@ function App() {
                   <input 
                     type="number"
                     min="0"
+                    max={isSandboxMode ? balances.usdc : undefined}
                     value={budgetAmount}
-                    onChange={(e) => setBudgetAmount(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setBudgetAmount(isSandboxMode ? Math.min(val, balances.usdc) : val);
+                    }}
                     style={{
                       background: 'rgba(255,255,255,0.05)',
                       border: '1px solid var(--border-light)',
@@ -820,6 +1034,13 @@ function App() {
                   <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--purple-light)' }}>USDC</span>
                 </div>
               </div>
+
+              {isSandboxMode && balances.usdc === 0 && (
+                <div className="validation-warning" style={{ border: '1px solid rgba(157, 78, 221, 0.3)', background: 'rgba(157, 78, 221, 0.05)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Sparkles size={16} style={{ color: 'var(--purple-light)' }} />
+                  <span>Your Sandbox USDC balance is <strong>$0</strong>. Go to the 🏦 <strong>Savings Vault</strong> tab to set your sandbox funds.</span>
+                </div>
+              )}
 
               {/* Side-by-Side Bucket Displays */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
@@ -1228,22 +1449,26 @@ function App() {
                             {isOutgoing ? 'To: ' : 'From: '}{displayCounterparty}
                           </span>
 
-                          <a 
-                            href={`https://stellar.expert/explorer/${network === 'mainnet' ? 'public' : 'testnet'}/tx/${tx.transaction_hash}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{
-                              color: 'var(--purple-accent)',
-                              textDecoration: 'none',
-                              fontWeight: 700,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '2px'
-                            }}
-                          >
-                            <span>Explorer</span>
-                            <ArrowUpRight size={10} />
-                          </a>
+                          {isSandboxMode ? (
+                            <span style={{ color: 'var(--text-dim)', fontWeight: 700 }}>Sandbox Tx</span>
+                          ) : (
+                            <a 
+                              href={`https://stellar.expert/explorer/${network === 'mainnet' ? 'public' : 'testnet'}/tx/${tx.transaction_hash}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{
+                                color: 'var(--purple-accent)',
+                                textDecoration: 'none',
+                                fontWeight: 700,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '2px'
+                              }}
+                            >
+                              <span>Explorer</span>
+                              <ArrowUpRight size={10} />
+                            </a>
+                          )}
                         </div>
                       </div>
                     );
@@ -1325,16 +1550,31 @@ function App() {
             </div>
           </div>
 
-          <a 
-            href={`https://stellar.expert/explorer/${network === 'mainnet' ? 'public' : 'testnet'}/tx/${lastTxHash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn-primary"
-            style={{ textDecoration: 'none', padding: '10px' }}
-          >
-            <span>Verify on Stellar Expert</span>
-            <ArrowUpRight size={14} />
-          </a>
+          {isSandboxMode ? (
+            <div style={{
+              textAlign: 'center',
+              padding: '12px',
+              background: 'rgba(157, 78, 221, 0.1)',
+              border: '1px solid rgba(157, 78, 221, 0.25)',
+              borderRadius: '12px',
+              color: 'var(--purple-light)',
+              fontWeight: 700,
+              fontSize: '13px'
+            }}>
+              Sandbox Transaction Recorded Visually
+            </div>
+          ) : (
+            <a 
+              href={`https://stellar.expert/explorer/${network === 'mainnet' ? 'public' : 'testnet'}/tx/${lastTxHash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-primary"
+              style={{ textDecoration: 'none', padding: '10px' }}
+            >
+              <span>Verify on Stellar Expert</span>
+              <ArrowUpRight size={14} />
+            </a>
+          )}
 
           <button 
             onClick={() => setShowTransferSuccess(false)}
