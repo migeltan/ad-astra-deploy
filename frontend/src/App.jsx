@@ -25,6 +25,32 @@ import {
   Check
 } from 'lucide-react';
 
+import { 
+  isConnected, 
+  getNetwork, 
+  signTransaction,
+  requestAccess
+} from '@stellar/freighter-api';
+
+import { 
+  Keypair, 
+  Contract, 
+  TransactionBuilder, 
+  Networks, 
+  BASE_FEE, 
+  nativeToScVal, 
+  scValToNative, 
+  Address, 
+  xdr, 
+  rpc, 
+  Operation, 
+  Asset,
+  Account,
+  Horizon
+} from '@stellar/stellar-sdk';
+
+const CONTRACT_ID = "CDQOBACPTRVMNOJMD2NFNNNTZJ4YTQCGFR6N5OKM7643CGBFZ2KGCTLT";
+
 function App() {
   // Wallet Address State
   const [walletAddress, setWalletAddress] = useState('');
@@ -94,6 +120,409 @@ function App() {
   const [showTransferSuccess, setShowTransferSuccess] = useState(false);
   const [lastTxHash, setLastTxHash] = useState('');
 
+  // On-Chain Buckets (Soroban) State
+  const [contractBuckets, setContractBuckets] = useState(null);
+  const [isFetchingContractData, setIsFetchingContractData] = useState(false);
+  
+  // Syncing State
+  const [isSyncingAllocations, setIsSyncingAllocations] = useState(false);
+  const [syncLogs, setSyncLogs] = useState([]);
+  const [showSyncSuccess, setShowSyncSuccess] = useState(false);
+  const [syncTxHash, setSyncTxHash] = useState('');
+
+  // Soroban Invoicing States
+  const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
+  const [invoiceLogs, setInvoiceLogs] = useState([]);
+  const [invoiceClientAddress, setInvoiceClientAddress] = useState('');
+  const [invoiceAmountUsdc, setInvoiceAmountUsdc] = useState('');
+  const [invoiceDescription, setInvoiceDescription] = useState('');
+  const [invoiceIdToPay, setInvoiceIdToPay] = useState('');
+  const [isPayingInvoice, setIsPayingInvoice] = useState(false);
+  const [payInvoiceLogs, setPayInvoiceLogs] = useState([]);
+  const [workerInvoices, setWorkerInvoices] = useState([]);
+  const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
+
+  // Withdraw Bucket States
+  const [withdrawingBucket, setWithdrawingBucket] = useState(null);
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [withdrawLogs, setWithdrawLogs] = useState([]);
+
+
+  const [reloadCounter, setReloadCounter] = useState(0);
+  const triggerReloadData = () => setReloadCounter(prev => prev + 1);
+
+  // Helper to resolve Soroban Enum Variant names
+  const resolveStatus = (statusObj) => {
+    if (!statusObj) return 'Unknown';
+    if (typeof statusObj === 'string') return statusObj;
+    if (statusObj.name) return statusObj.name;
+    if (typeof statusObj === 'object') {
+      return Object.keys(statusObj)[0] || 'Unknown';
+    }
+    return String(statusObj);
+  };
+
+  // Helper to submit a transaction using Freighter
+  const sendTransactionWithFreighter = async (operation, setLogs) => {
+    const cleanAddress = walletAddress.trim();
+    if (!cleanAddress) throw new Error("Wallet not connected");
+
+    setLogs([
+      { text: "⏳ Initiating on-chain transaction request...", type: "info" },
+      { text: `🔑 Account address: ${cleanAddress.slice(0, 6)}...${cleanAddress.slice(-6)}`, type: "stellar" }
+    ]);
+
+    // Query Freighter's active network setting dynamically to align our build phase
+    let activeNetwork = network;
+    try {
+      const netRes = await getNetwork();
+      if (netRes && !netRes.error && netRes.network) {
+        activeNetwork = netRes.network.toLowerCase() === 'public' ? 'mainnet' : 'testnet';
+        if (activeNetwork !== network) {
+          setNetwork(activeNetwork);
+        }
+      }
+    } catch (e) {
+      console.warn("Could not retrieve Freighter network:", e);
+    }
+
+    const rpcUrl = activeNetwork === 'mainnet'
+      ? 'https://soroban-rpc.stellar.org'
+      : 'https://soroban-testnet.stellar.org';
+    const server = new rpc.Server(rpcUrl);
+    const passphrase = activeNetwork === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
+
+    setLogs(prev => [...prev, { text: `🛰️ Fetching current account sequence from Horizon (${activeNetwork.toUpperCase()})...`, type: "info" }]);
+    
+    const horizonUrl = activeNetwork === 'mainnet'
+      ? `https://horizon.stellar.org/accounts/${cleanAddress}`
+      : `https://horizon-testnet.stellar.org/accounts/${cleanAddress}`;
+      
+    const accountRes = await fetch(horizonUrl);
+    if (!accountRes.ok) {
+      throw new Error("Could not load account sequence. Make sure the account is funded on-chain.");
+    }
+    const accountData = await accountRes.json();
+    const account = new Account(cleanAddress, accountData.sequence);
+
+    setLogs(prev => [...prev, { text: "📜 Building transaction envelope...", type: "info" }]);
+    
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: passphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(180)
+      .build();
+
+    setLogs(prev => [...prev, { text: "🔧 Running Soroban simulation to determine resource fees...", type: "info" }]);
+    const simRes = await server.simulateTransaction(tx);
+    
+    if (simRes.error) {
+      throw new Error(`Simulation failed: ${simRes.error}`);
+    }
+    if (simRes.result?.error) {
+      throw new Error(`Simulation failed in smart contract: ${JSON.stringify(simRes.result.error)}`);
+    }
+
+    setLogs(prev => [...prev, { text: "💰 Rebuilding transaction with simulation resource fees...", type: "info" }]);
+    
+    const minFee = parseInt(simRes.minResourceFee || "0");
+    const fee = String(minFee + parseInt(BASE_FEE) + 1000); 
+    
+    const rebuiltTx = new TransactionBuilder(account, {
+      fee,
+      networkPassphrase: passphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(180)
+      .setSorobanData(simRes.transactionData)
+      .build();
+
+    if (simRes.results?.[0]?.auth) {
+      const op = rebuiltTx.operations[0];
+      op.auth = simRes.results[0].auth.map(a => 
+        xdr.SorobanAuthorizationEntry.fromXDR(a, 'base64')
+      );
+    }
+
+    const rebuiltXdr = rebuiltTx.toEnvelope().toXDR("base64");
+    
+    setLogs(prev => [...prev, { text: "🖊️ Cryptographically signing transaction via Freighter...", type: "stellar" }]);
+    
+    const signRes = await signTransaction(rebuiltXdr, {
+      networkPassphrase: passphrase
+    });
+
+    if (signRes.error) {
+      throw new Error(`Signing failed: ${signRes.error.message || JSON.stringify(signRes.error)}`);
+    }
+    const signedTxXdr = signRes.signedTxXdr;
+
+    setLogs(prev => [...prev, { text: "🚀 Submitting signed XDR to Soroban RPC node...", type: "stellar" }]);
+    const submitRes = await server.sendTransaction(
+      TransactionBuilder.fromXDR(signedTxXdr, passphrase)
+    );
+
+    if (submitRes.status === "ERROR") {
+      throw new Error(`Transaction submission failed: ${JSON.stringify(submitRes.errorResultXdr)}`);
+    }
+
+    const txHash = submitRes.hash;
+    setLogs(prev => [...prev, { text: `⏳ Waiting for ledger confirmation... TX: ${txHash.slice(0,8)}...`, type: "info" }]);
+
+    let getTxRes;
+    let attempts = 0;
+    while (attempts < 30) {
+      await new Promise(r => setTimeout(r, 2000));
+      getTxRes = await server.getTransaction(txHash);
+      if (getTxRes.status !== "NOT_FOUND") {
+        break;
+      }
+      attempts++;
+    }
+
+    if (getTxRes.status === "SUCCESS") {
+      setLogs(prev => [...prev, { text: "🎉 LEDGER CONFIRMED! Success.", type: "success" }]);
+      return txHash;
+    } else {
+      throw new Error(`Transaction failed with status: ${getTxRes.status}. Error: ${JSON.stringify(getTxRes.resultXdr)}`);
+    }
+  };
+
+  // Sync allocations to Soroban smart contract
+  const handleSyncAllocations = async () => {
+    if (isSandboxMode) return;
+    if (totalAllocationPct !== 100) {
+      alert("Allocations must sum to 100% to sync.");
+      return;
+    }
+
+    setIsSyncingAllocations(true);
+    setSyncLogs([]);
+    setShowSyncSuccess(false);
+
+    try {
+      const contract = new Contract(CONTRACT_ID);
+      const allocationsScVal = xdr.ScVal.scvVec(
+        allocations.map(a => 
+          xdr.ScVal.scvMap([
+            new xdr.ScMapEntry({
+              key: nativeToScVal("label", { type: "symbol" }),
+              val: nativeToScVal(a.label, { type: "string" }),
+            }),
+            new xdr.ScMapEntry({
+              key: nativeToScVal("percent", { type: "symbol" }),
+              val: nativeToScVal(a.pct, { type: "u32" }),
+            }),
+          ])
+        )
+      );
+
+      const op = contract.call(
+        "set_allocations",
+        new Address(walletAddress).toScVal(),
+        allocationsScVal
+      );
+
+      const txHash = await sendTransactionWithFreighter(op, setSyncLogs);
+      setSyncTxHash(txHash);
+      setShowSyncSuccess(true);
+      
+      triggerReloadData();
+    } catch (err) {
+      console.error("Sync Allocations Error:", err);
+      setSyncLogs(prev => [...prev, { text: `❌ Error: ${err.message || JSON.stringify(err)}`, type: "error" }]);
+    } finally {
+      setIsSyncingAllocations(false);
+    }
+  };
+
+  // Withdraw bucket balances
+  const handleWithdrawSubmit = async (bucketLabel, amount) => {
+    if (isSandboxMode) return;
+    const amt = parseFloat(amount);
+    if (isNaN(amt) || amt <= 0) {
+      alert("Please enter a valid amount.");
+      return;
+    }
+
+    setIsWithdrawing(true);
+    setWithdrawLogs([]);
+
+    try {
+      const contract = new Contract(CONTRACT_ID);
+      const op = contract.call(
+        "withdraw_from_bucket",
+        new Address(walletAddress).toScVal(),
+        nativeToScVal(bucketLabel, { type: "string" }),
+        nativeToScVal(Math.round(amt * 10_000_000), { type: "i128" })
+      );
+
+      await sendTransactionWithFreighter(op, setWithdrawLogs);
+      
+      setWithdrawAmount('');
+      setWithdrawingBucket(null);
+
+      triggerReloadData();
+    } catch (err) {
+      console.error("Withdraw Bucket Error:", err);
+      setWithdrawLogs(prev => [...prev, { text: `❌ Error: ${err.message || JSON.stringify(err)}`, type: "error" }]);
+    } finally {
+      setIsWithdrawing(false);
+    }
+  };
+
+  // Create on-chain invoice
+  const handleCreateInvoice = async (e) => {
+    e.preventDefault();
+    if (isSandboxMode) return;
+    const clientAddr = invoiceClientAddress.trim();
+    const amt = parseFloat(invoiceAmountUsdc);
+    const desc = invoiceDescription.trim() || "Freelance Work - Kwagee Project";
+
+    if (!clientAddr || isNaN(amt) || amt <= 0) {
+      alert("Please fill in recipient address and a valid amount.");
+      return;
+    }
+
+    setIsCreatingInvoice(true);
+    setInvoiceLogs([]);
+
+    try {
+      const contract = new Contract(CONTRACT_ID);
+      const op = contract.call(
+        "create_invoice",
+        new Address(walletAddress).toScVal(),
+        new Address(clientAddr).toScVal(),
+        nativeToScVal(Math.round(amt * 10_000_000), { type: "i128" }),
+        nativeToScVal(desc, { type: "string" })
+      );
+
+      await sendTransactionWithFreighter(op, setInvoiceLogs);
+      
+      setInvoiceClientAddress('');
+      setInvoiceAmountUsdc('');
+      setInvoiceDescription('');
+
+      fetchInvoices();
+    } catch (err) {
+      console.error("Create Invoice Error:", err);
+      setInvoiceLogs(prev => [...prev, { text: `❌ Error: ${err.message || JSON.stringify(err)}`, type: "error" }]);
+    } finally {
+      setIsCreatingInvoice(false);
+    }
+  };
+
+  // Pay invoice
+  const handlePayInvoice = async (invoiceId) => {
+    if (isSandboxMode) return;
+    if (!invoiceId) return;
+
+    setIsPayingInvoice(true);
+    setPayInvoiceLogs([]);
+
+    try {
+      const contract = new Contract(CONTRACT_ID);
+      const op = contract.call(
+        "pay_invoice",
+        new Address(walletAddress).toScVal(),
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+
+      await sendTransactionWithFreighter(op, setPayInvoiceLogs);
+      
+      setInvoiceIdToPay('');
+
+      triggerReloadData();
+    } catch (err) {
+      console.error("Pay Invoice Error:", err);
+      setPayInvoiceLogs(prev => [...prev, { text: `❌ Error: ${err.message || JSON.stringify(err)}`, type: "error" }]);
+    } finally {
+      setIsPayingInvoice(false);
+    }
+  };
+
+  // Fetch smart invoices list
+  const fetchInvoices = async () => {
+    const cleanAddress = walletAddress.trim();
+    if (!cleanAddress || cleanAddress.length < 30 || isSandboxMode) return;
+
+    setIsLoadingInvoices(true);
+    
+    const rpcUrl = network === 'mainnet'
+      ? 'https://soroban-rpc.stellar.org'
+      : 'https://soroban-testnet.stellar.org';
+    const server = new rpc.Server(rpcUrl);
+    const contract = new Contract(CONTRACT_ID);
+    const passphrase = network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
+
+    try {
+      const dummyAccount = new Account(cleanAddress, "0");
+
+      const tx = new TransactionBuilder(dummyAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: passphrase,
+      })
+        .addOperation(
+          contract.call("get_worker_invoices", new Address(cleanAddress).toScVal())
+        )
+        .setTimeout(180)
+        .build();
+
+      const simRes = await server.simulateTransaction(tx);
+      if (!simRes.error && simRes.result?.retval) {
+        const invoiceIds = scValToNative(simRes.result.retval);
+        if (Array.isArray(invoiceIds) && invoiceIds.length > 0) {
+          const detailsPromises = invoiceIds.map(async (id) => {
+            try {
+              const detailTx = new TransactionBuilder(dummyAccount, {
+                fee: BASE_FEE,
+                networkPassphrase: passphrase,
+              })
+                .addOperation(
+                  contract.call("get_invoice", nativeToScVal(BigInt(id), { type: "u64" }))
+                )
+                .setTimeout(180)
+                .build();
+
+              const detailSim = await server.simulateTransaction(detailTx);
+              if (!detailSim.error && detailSim.result?.retval) {
+                const invoiceData = scValToNative(detailSim.result.retval);
+                return {
+                  id: Number(invoiceData.id),
+                  worker: invoiceData.worker,
+                  client: invoiceData.client,
+                  amountUsdc: Number(invoiceData.amount_usdc) / 10000000,
+                  description: invoiceData.description,
+                  status: resolveStatus(invoiceData.status),
+                  createdAt: Number(invoiceData.created_at) * 1000,
+                  paidAt: Number(invoiceData.paid_at) * 1000
+                };
+              }
+            } catch (e) {
+              console.error(`Error fetching invoice details for ${id}:`, e);
+            }
+            return null;
+          });
+
+          const resolvedInvoices = await Promise.all(detailsPromises);
+          setWorkerInvoices(resolvedInvoices.filter(i => i !== null).sort((a, b) => b.id - a.id));
+        } else {
+          setWorkerInvoices([]);
+        }
+      } else {
+        setWorkerInvoices([]);
+      }
+    } catch (err) {
+      console.error("Error fetching worker invoices:", err);
+      setWorkerInvoices([]);
+    } finally {
+      setIsLoadingInvoices(false);
+    }
+  };
+
   // Fetch Live Balance from Stellar Horizon Ledger
   useEffect(() => {
     const fetchBalance = async () => {
@@ -134,10 +563,9 @@ function App() {
         setBalances({
           xlm: xlmBalance,
           usdc: usdcBalance,
-          php: usdcBalance > 0 ? usdcBalance * 57 : xlmBalance * 0.11 * 57 // Fallback using mock XLM price if no USDC
+          php: usdcBalance > 0 ? usdcBalance * 57 : xlmBalance * 0.11 * 57
         });
 
-        // Initialize budgetAmount to a default split (40%) if it is 0
         setBudgetAmount(prev => {
           if (prev === 0 && usdcBalance > 0) {
             return Math.round(usdcBalance * 0.4);
@@ -158,7 +586,108 @@ function App() {
     };
 
     fetchBalance();
-  }, [walletAddress, network]);
+  }, [walletAddress, network, isSandboxMode, reloadCounter]);
+
+  // Fetch Soroban Smart Contract allocations and buckets
+  useEffect(() => {
+    const fetchContractData = async () => {
+      const cleanAddress = walletAddress.trim();
+      if (!cleanAddress || cleanAddress.length < 30 || isSandboxMode) return;
+
+      setIsFetchingContractData(true);
+      
+      const rpcUrl = network === 'mainnet'
+        ? 'https://soroban-rpc.stellar.org'
+        : 'https://soroban-testnet.stellar.org';
+        
+      const server = new rpc.Server(rpcUrl);
+      const contract = new Contract(CONTRACT_ID);
+
+      try {
+        const dummyAccount = new Account(cleanAddress, "0");
+
+        // 1. Fetch Allocations
+        const allocationsTx = new TransactionBuilder(dummyAccount, {
+          fee: BASE_FEE,
+          networkPassphrase: network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET,
+        })
+          .addOperation(
+            contract.call("get_allocations", new Address(cleanAddress).toScVal())
+          )
+          .setTimeout(180)
+          .build();
+
+        const allocSim = await server.simulateTransaction(allocationsTx);
+        if (!allocSim.error && allocSim.result?.retval) {
+          const nativeAllocations = scValToNative(allocSim.result.retval);
+          if (Array.isArray(nativeAllocations) && nativeAllocations.length > 0) {
+            const mappedAllocations = nativeAllocations.map((a, idx) => {
+              const label = a.label;
+              const pct = Number(a.percent);
+              
+              const standardItems = {
+                'SSS': { color: '#ff9f1c', iconName: 'ShieldAlert' },
+                'Philhealth': { color: '#00f5d4', iconName: 'Heart' },
+                'Pag-IBIG': { color: '#3a86ff', iconName: 'Home' },
+                'Income Tax Return': { color: '#ff0055', iconName: 'Zap' },
+                'Bills & Utilities': { color: '#9d4edd', iconName: 'RefreshCw' },
+                'Spendable Cash': { color: '#ff007f', iconName: 'Coins' }
+              };
+              
+              const standard = standardItems[label];
+              return {
+                id: standard ? label.toLowerCase().replace(/[^a-z]/g, '') : `custom_${idx}_${Date.now()}`,
+                label,
+                pct,
+                color: standard ? standard.color : customColors[idx % customColors.length],
+                iconName: standard ? standard.iconName : 'Coins',
+                isCustom: !standard
+              };
+            });
+            setAllocations(mappedAllocations);
+          }
+        }
+
+        // 2. Fetch Bucket Balances
+        const bucketsTx = new TransactionBuilder(dummyAccount, {
+          fee: BASE_FEE,
+          networkPassphrase: network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET,
+        })
+          .addOperation(
+            contract.call("get_buckets", new Address(cleanAddress).toScVal())
+          )
+          .setTimeout(180)
+          .build();
+
+        const bucketsSim = await server.simulateTransaction(bucketsTx);
+        if (!bucketsSim.error && bucketsSim.result?.retval) {
+          const nativeBuckets = scValToNative(bucketsSim.result.retval);
+          const parsedBuckets = {};
+          if (nativeBuckets && typeof nativeBuckets === 'object') {
+            if (nativeBuckets instanceof Map) {
+              nativeBuckets.forEach((val, key) => {
+                parsedBuckets[key] = Number(val) / 10000000;
+              });
+            } else {
+              Object.keys(nativeBuckets).forEach(k => {
+                parsedBuckets[k] = Number(nativeBuckets[k]) / 10000000;
+              });
+            }
+          }
+          setContractBuckets(parsedBuckets);
+        } else {
+          setContractBuckets({});
+        }
+
+      } catch (err) {
+        console.error("Error fetching Soroban data:", err);
+      } finally {
+        setIsFetchingContractData(false);
+      }
+    };
+
+    fetchContractData();
+  }, [walletAddress, network, isSandboxMode, reloadCounter]);
 
   // Fetch Live Chronological Transaction Payments Feed
   useEffect(() => {
@@ -192,7 +721,12 @@ function App() {
     };
 
     fetchHistory();
-  }, [walletAddress, network]);
+  }, [walletAddress, network, reloadCounter]);
+
+  // Fetch smart invoices list
+  useEffect(() => {
+    fetchInvoices();
+  }, [walletAddress, network, isSandboxMode, reloadCounter]);
 
   // Clamp budgetAmount in sandbox mode when balances.usdc changes
   useEffect(() => {
@@ -240,7 +774,7 @@ function App() {
     setAllocations(prev => prev.map(item => item.id === id ? { ...item, pct: val } : item));
   };
 
-  // Trigger simulated transfer with live console logging
+  // Trigger transfer (simulated or real depending on sandbox state)
   const handleTransferSubmit = (e) => {
     e.preventDefault();
     const cleanRecipient = transferRecipient.trim();
@@ -256,81 +790,218 @@ function App() {
       return;
     }
 
-    setIsSimulatingTransfer(true);
-    setTransferLogs([]);
+    if (isSandboxMode) {
+      setIsSimulatingTransfer(true);
+      setTransferLogs([]);
 
-    const logs = [
-      { text: '⏳ Initiating Stellar Freighter Wallet request...', type: 'info' },
-      { text: `🔑 Connection detected for: ${walletAddress.slice(0, 6)}...${walletAddress.slice(-6)}`, type: 'stellar' },
-      { text: `🛰️ Resolving destination trustlines for ${transferAsset}...`, type: 'info' },
-      { text: '📜 Constructing Stellar transaction sequence object...', type: 'info' },
-      { text: `💸 Operation: Payment of ${amount} ${transferAsset} to ${cleanRecipient.slice(0, 6)}...${cleanRecipient.slice(-6)}`, type: 'info' },
-      { text: '🖊️ Requesting cryptographic signature via Freighter...', type: 'stellar' },
-      { text: '🚀 Submitting signed transaction XDR payload to Stellar Horizon node...', type: 'stellar' },
-      { text: '📡 Horizon: Processing ledger consensus (3-5 seconds)...', type: 'info' },
-      { text: '🎉 LEDGER CONFIRMED! Sequence verified.', type: 'success' },
-      { text: `💰 Debit transaction processed successfully!`, type: 'success' }
-    ];
+      const logs = [
+        { text: '⏳ Initiating Stellar Sandbox Wallet request...', type: 'info' },
+        { text: `🔑 Connection detected for Sandbox Wallet`, type: 'stellar' },
+        { text: `🛰️ Resolving destination trustlines for ${transferAsset}...`, type: 'info' },
+        { text: '📜 Constructing Stellar transaction sequence object...', type: 'info' },
+        { text: `💸 Operation: Payment of ${amount} ${transferAsset} to ${cleanRecipient.slice(0, 6)}...${cleanRecipient.slice(-6)}`, type: 'info' },
+        { text: '🎉 LEDGER CONFIRMED! Sequence verified.', type: 'success' },
+        { text: `💰 Debit transaction processed successfully!`, type: 'success' }
+      ];
 
-    let currentLogIndex = 0;
-    const interval = setInterval(() => {
-      if (currentLogIndex < logs.length) {
-        setTransferLogs(prev => [...prev, logs[currentLogIndex]]);
-        currentLogIndex++;
-      } else {
-        clearInterval(interval);
-        setIsSimulatingTransfer(false);
-        
-        const hash = Math.random().toString(16).substring(2, 10) + '8f4b00de' + Math.random().toString(16).substring(2, 10) + 'e';
-        setLastTxHash(hash);
+      let currentLogIndex = 0;
+      const interval = setInterval(() => {
+        if (currentLogIndex < logs.length) {
+          setTransferLogs(prev => [...prev, logs[currentLogIndex]]);
+          currentLogIndex++;
+        } else {
+          clearInterval(interval);
+          setIsSimulatingTransfer(false);
+          
+          const hash = Math.random().toString(16).substring(2, 10) + '8f4b00de' + Math.random().toString(16).substring(2, 10) + 'e';
+          setLastTxHash(hash);
 
-        // Deduct from local balances
-        setBalances(prev => {
-          const newUsdc = transferAsset === 'USDC' ? Math.max(0, prev.usdc - amount) : prev.usdc;
-          const newXlm = transferAsset === 'XLM' ? Math.max(0, prev.xlm - amount) : prev.xlm;
-          return {
-            xlm: newXlm,
-            usdc: newUsdc,
-            php: newUsdc > 0 ? newUsdc * 57 : newXlm * 0.11 * 57
+          // Deduct from local balances
+          setBalances(prev => {
+            const newUsdc = transferAsset === 'USDC' ? Math.max(0, prev.usdc - amount) : prev.usdc;
+            const newXlm = transferAsset === 'XLM' ? Math.max(0, prev.xlm - amount) : prev.xlm;
+            return {
+              xlm: newXlm,
+              usdc: newUsdc,
+              php: newUsdc > 0 ? newUsdc * 57 : newXlm * 0.11 * 57
+            };
+          });
+
+          // Add a mock transaction record to the history stream at the top
+          const newRecord = {
+            id: Math.random().toString(),
+            type: 'payment',
+            amount: amount.toFixed(7),
+            asset_type: transferAsset === 'XLM' ? 'native' : 'credit_alphanum4',
+            asset_code: transferAsset === 'USDC' ? 'USDC' : undefined,
+            from: walletAddress,
+            to: cleanRecipient,
+            created_at: new Date().toISOString(),
+            transaction_hash: hash
           };
-        });
+          setTransactions(prev => [newRecord, ...prev]);
 
-        // Add a mock transaction record to the history stream at the top
-        const newRecord = {
-          id: Math.random().toString(),
-          type: 'payment',
-          amount: amount.toFixed(7),
-          asset_type: transferAsset === 'XLM' ? 'native' : 'credit_alphanum4',
-          asset_code: transferAsset === 'USDC' ? 'USDC' : undefined,
-          from: walletAddress,
-          to: cleanRecipient,
-          created_at: new Date().toISOString(),
-          transaction_hash: hash
-        };
-        setTransactions(prev => [newRecord, ...prev]);
+          // Reset transfer input fields
+          setTransferAmount('');
+          setTransferRecipient('');
+          setShowTransferSuccess(true);
+        }
+      }, 450);
+    } else {
+      // Real mode: Build, sign, and submit via Horizon and Freighter
+      setIsSimulatingTransfer(true);
+      setTransferLogs([
+        { text: '⏳ Initiating Stellar Freighter Wallet request...', type: 'info' },
+        { text: `🔑 Connection detected for: ${walletAddress.slice(0, 6)}...${walletAddress.slice(-6)}`, type: 'stellar' },
+        { text: '🛰️ Aligning network settings with Freighter configuration...', type: 'info' }
+      ]);
 
-        // Reset transfer input fields
-        setTransferAmount('');
-        setTransferRecipient('');
-        setShowTransferSuccess(true);
-      }
-    }, 450);
+      (async () => {
+        try {
+          // Query Freighter's active network setting dynamically to align our build phase
+          let activeNetwork = network;
+          try {
+            const netRes = await getNetwork();
+            if (netRes && !netRes.error && netRes.network) {
+              activeNetwork = netRes.network.toLowerCase() === 'public' ? 'mainnet' : 'testnet';
+              if (activeNetwork !== network) {
+                setNetwork(activeNetwork);
+              }
+            }
+          } catch (e) {
+            console.warn("Could not retrieve Freighter network:", e);
+          }
+
+          setTransferLogs(prev => [
+            ...prev,
+            { text: `🛰️ Connecting to Horizon ${activeNetwork.toUpperCase()} ledger...`, type: 'info' }
+          ]);
+
+          const horizonUrl = activeNetwork === 'mainnet'
+            ? 'https://horizon.stellar.org'
+            : 'https://horizon-testnet.stellar.org';
+          const server = new Horizon.Server(horizonUrl);
+          const passphrase = activeNetwork === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
+
+          setTransferLogs(prev => [...prev, { text: '🛰️ Fetching current account sequence from Horizon...', type: 'info' }]);
+          const account = await server.loadAccount(walletAddress);
+
+          setTransferLogs(prev => [...prev, { text: `🛰️ Resolving destination trustlines for ${transferAsset}...`, type: 'info' }]);
+          
+          const issuer = activeNetwork === 'mainnet'
+            ? 'GB38ZRP7HVN77WCM7TR2QEI6AQSF2PJPEHUGEB474TRW5O3W27QI2EPE'
+            : 'GBBD47IF6LWK7P7KTUWFGISYZUX5OLKRI7IGTZT2BKEC72GWISPF2TOW';
+
+          const asset = transferAsset === 'XLM'
+            ? Asset.native()
+            : new Asset('USDC', issuer);
+
+          setTransferLogs(prev => [...prev, { text: '📜 Constructing Stellar transaction sequence object...', type: 'info' }]);
+          const tx = new TransactionBuilder(account, {
+            fee: BASE_FEE,
+            networkPassphrase: passphrase,
+          })
+            .addOperation(
+              Operation.payment({
+                destination: cleanRecipient,
+                asset: asset,
+                amount: amount.toString()
+              })
+            )
+            .setTimeout(180)
+            .build();
+
+          const txXdr = tx.toEnvelope().toXDR('base64');
+
+          setTransferLogs(prev => [...prev, { text: '🖊️ Requesting cryptographic signature via Freighter...', type: 'stellar' }]);
+          const signRes = await signTransaction(txXdr, {
+            networkPassphrase: passphrase
+          });
+
+          if (signRes.error) {
+            throw new Error(`Signing failed: ${signRes.error.message || JSON.stringify(signRes.error)}`);
+          }
+          const signedTxXdr = signRes.signedTxXdr;
+
+          setTransferLogs(prev => [...prev, { text: '🚀 Submitting signed transaction XDR payload to Stellar Horizon node...', type: 'stellar' }]);
+          const response = await server.submitTransaction(
+            TransactionBuilder.fromXDR(signedTxXdr, passphrase)
+          );
+
+          setTransferLogs(prev => [...prev, { text: '🎉 LEDGER CONFIRMED! Sequence verified.', type: 'success' }]);
+          setLastTxHash(response.hash);
+
+          // Reset transfer input fields
+          setTransferAmount('');
+          setTransferRecipient('');
+          setShowTransferSuccess(true);
+
+          // Force-refresh balances
+          triggerReloadData();
+        } catch (err) {
+          console.error("Transfer error:", err);
+          setTransferLogs(prev => [...prev, { text: `❌ Error: ${err.message || JSON.stringify(err)}`, type: 'error' }]);
+        } finally {
+          setIsSimulatingTransfer(false);
+        }
+      })();
+    }
   };
 
-  // Handle landing connection submit
+  // Handle landing connection submit (manual fallback)
   const handleConnectSubmit = (e) => {
     e.preventDefault();
     const addr = walletInputVal.trim();
     if (!addr) {
-      setLandingError('Please enter a Stellar address.');
+      setLandingError('Please enter a Stellar public address.');
       return;
     }
-    if (!addr.startsWith('G') || addr.length < 30) {
-      setLandingError('Invalid Stellar address. Public keys must start with "G" and be at least 30 characters long.');
+    try {
+      Keypair.fromPublicKey(addr);
+    } catch (err) {
+      setLandingError('Invalid Stellar address. Public keys must be 56 characters and cryptographically valid.');
       return;
     }
     setLandingError('');
     setWalletAddress(addr);
+  };
+
+  // Handle connection via Freighter Wallet extension
+  const handleConnectFreighter = async () => {
+    setLandingError('');
+    try {
+      const conn = await isConnected();
+      if (!conn || !conn.isConnected) {
+        setLandingError('Freighter wallet extension not detected. Please install Freighter.');
+        return;
+      }
+      
+      // Request access (prompts user for permission automatically)
+      const accessRes = await requestAccess();
+      if (!accessRes || accessRes.error || !accessRes.address) {
+        const errorMsg = accessRes?.error?.message || accessRes?.error || 'Access request denied. Please check your Freighter extension.';
+        setLandingError(typeof errorMsg === 'object' ? JSON.stringify(errorMsg) : errorMsg);
+        return;
+      }
+      
+      const address = accessRes.address;
+      
+      // Query freighter's active network setting and sync it
+      try {
+        const netRes = await getNetwork();
+        if (netRes && !netRes.error && netRes.network) {
+          setNetwork(netRes.network.toLowerCase() === 'public' ? 'mainnet' : 'testnet');
+        }
+      } catch (netErr) {
+        console.warn("Failed to retrieve network setting from Freighter:", netErr);
+      }
+
+      setLandingError('');
+      setWalletAddress(address);
+      setWalletInputVal(address);
+    } catch (err) {
+      setLandingError(err.message || 'Failed to connect via Freighter.');
+    }
   };
 
   // Handle sandbox launch with simulated data and editable controls
@@ -421,7 +1092,12 @@ function App() {
               </div>
             )}
 
-            <button type="submit" className="landing-btn-submit">
+            <button type="submit" className="landing-btn-submit" style={{ marginBottom: '12px', background: 'linear-gradient(135deg, var(--purple-dim), var(--primary-glow))' }}>
+              <Send size={18} />
+              <span>Access with Public Address</span>
+            </button>
+
+            <button type="button" onClick={handleConnectFreighter} className="landing-btn-submit">
               <Wallet size={18} />
               <span>Connect Freighter Wallet</span>
             </button>
@@ -541,15 +1217,27 @@ function App() {
                 value={walletInputVal}
                 onChange={(e) => setWalletInputVal(e.target.value)}
                 onBlur={() => {
-                  if (walletInputVal.trim().length >= 30) {
-                    setWalletAddress(walletInputVal.trim());
+                  const addr = walletInputVal.trim();
+                  if (addr) {
+                    try {
+                      Keypair.fromPublicKey(addr);
+                      setWalletAddress(addr);
+                    } catch (err) {
+                      alert('Invalid Stellar address. Public keys must be 56 characters and cryptographically valid.');
+                    }
                   }
                   setIsEditingWallet(false);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    if (walletInputVal.trim().length >= 30) {
-                      setWalletAddress(walletInputVal.trim());
+                    const addr = walletInputVal.trim();
+                    if (addr) {
+                      try {
+                        Keypair.fromPublicKey(addr);
+                        setWalletAddress(addr);
+                      } catch (err) {
+                        alert('Invalid Stellar address. Public keys must be 56 characters and cryptographically valid.');
+                      }
                     }
                     setIsEditingWallet(false);
                   }
@@ -712,7 +1400,8 @@ function App() {
         {/* ==================== TAB 1: SAVINGS VAULT ==================== */}
         {activeTab === 'savings' && (
           <>
-            <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
               <div className="panel-title">
                 <Lock size={22} style={{ color: 'var(--success-color)' }} />
                 <span>Secure Personal Savings Vault {isSandboxMode ? '(Direct Sandbox Balance)' : '(Direct Address Balance)'}</span>
@@ -823,6 +1512,213 @@ function App() {
                 The aggregate balance displayed above corresponds strictly to your {isSandboxMode ? 'customized sandbox wallet balances' : 'live, on-chain public address holdings'}. The Kwagee dashboard treats this core value as safe and untouched from daily spend obligations until you explicitly choose to allocate an amount to budget.
               </div>
             </div>
+
+            {/* On-Chain Split Buckets (Soroban) */}
+            {!isSandboxMode && (
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div className="panel-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <PiggyBank size={22} style={{ color: 'var(--purple-light)' }} />
+                    <span>On-Chain Split Buckets (Soroban Contract)</span>
+                  </div>
+                  {isFetchingContractData && <RefreshCw size={14} className="animate-spin text-purple-light" />}
+                </div>
+
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0 }}>
+                  Your current allocated balances held securely within the Soroban self-budgeting smart contract. You can withdraw from any bucket back to your main wallet address at any time.
+                </p>
+
+                {contractBuckets === null ? (
+                  <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-dim)' }}>
+                    <RefreshCw size={24} className="animate-spin" style={{ margin: '0 auto 10px' }} />
+                    <span>Querying smart contract buckets...</span>
+                  </div>
+                ) : Object.keys(contractBuckets).length === 0 ? (
+                  <div style={{
+                    padding: '30px',
+                    textAlign: 'center',
+                    background: 'rgba(255,255,255,0.01)',
+                    borderRadius: '16px',
+                    border: '1px dashed var(--border-light)',
+                    color: 'var(--text-dim)'
+                  }}>
+                    No active bucket allocations found on-chain. Sync your allocations in the <strong>Budget Allocator</strong> tab to initialize your smart contract buckets.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {Object.entries(contractBuckets).map(([label, amt]) => {
+                      const standardColors = {
+                        'SSS': '#ff9f1c',
+                        'Philhealth': '#00f5d4',
+                        'Pag-IBIG': '#3a86ff',
+                        'Income Tax Return': '#ff0055',
+                        'Bills & Utilities': '#9d4edd',
+                        'Spendable Cash': '#ff007f'
+                      };
+                      const color = standardColors[label] || '#9d4edd';
+                      const amtPhp = amt * 57;
+
+                      return (
+                        <div key={label} style={{
+                          background: 'rgba(255,255,255,0.02)',
+                          border: '1px solid var(--border-light)',
+                          borderRadius: '16px',
+                          padding: '14px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '12px',
+                          position: 'relative'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <div style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: color }}></div>
+                              <span style={{ fontSize: '13px', fontWeight: 700, color: '#fff' }}>{label}</span>
+                            </div>
+                            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>USDC Allocated</span>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                            <div>
+                              <div style={{ fontSize: '18px', fontWeight: 800, color: '#fff' }}>
+                                ${amt.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </div>
+                              <div style={{ fontSize: '11px', color: 'var(--success-color)', fontWeight: 600 }}>
+                                ₱{amtPhp.toLocaleString(undefined, { maximumFractionDigits: 0 })} PHP
+                              </div>
+                            </div>
+
+                            {withdrawingBucket === label ? (
+                              <div style={{
+                                background: 'rgba(10, 6, 22, 0.95)',
+                                border: '1px solid var(--primary-glow)',
+                                borderRadius: '12px',
+                                padding: '8px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '6px',
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                bottom: 0,
+                                justifyContent: 'center',
+                                zIndex: 10
+                              }}>
+                                <div style={{ fontSize: '10px', fontWeight: 700, color: '#fff', textAlign: 'center' }}>Withdraw amount from {label}</div>
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                  <input 
+                                    type="number"
+                                    step="any"
+                                    placeholder="Amount USDC"
+                                    value={withdrawAmount}
+                                    onChange={(e) => setWithdrawAmount(e.target.value)}
+                                    style={{
+                                      flex: 1,
+                                      background: 'rgba(255,255,255,0.05)',
+                                      border: '1px solid var(--border-light)',
+                                      color: '#fff',
+                                      borderRadius: '6px',
+                                      padding: '4px 8px',
+                                      fontSize: '11px',
+                                      outline: 'none',
+                                      fontFamily: 'var(--font-outfit)'
+                                    }}
+                                  />
+                                  <button
+                                    onClick={() => handleWithdrawSubmit(label, withdrawAmount)}
+                                    disabled={isWithdrawing}
+                                    style={{
+                                      background: 'var(--purple-light)',
+                                      border: 'none',
+                                      color: '#fff',
+                                      borderRadius: '6px',
+                                      padding: '4px 10px',
+                                      fontSize: '10px',
+                                      fontWeight: 800,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    {isWithdrawing ? '...' : 'OK'}
+                                  </button>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    setWithdrawingBucket(null);
+                                    setWithdrawAmount('');
+                                  }}
+                                  style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    color: 'var(--text-secondary)',
+                                    fontSize: '9px',
+                                    cursor: 'pointer',
+                                    textDecoration: 'underline'
+                                  }}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setWithdrawingBucket(label);
+                                  setWithdrawAmount('');
+                                }}
+                                disabled={amt <= 0}
+                                style={{
+                                  background: amt > 0 ? 'rgba(157, 78, 221, 0.12)' : 'rgba(255,255,255,0.01)',
+                                  border: `1px solid ${amt > 0 ? 'rgba(157, 78, 221, 0.25)' : 'rgba(255,255,255,0.03)'}`,
+                                  color: amt > 0 ? 'var(--purple-light)' : 'var(--text-dim)',
+                                  borderRadius: '8px',
+                                  padding: '4px 10px',
+                                  fontSize: '10px',
+                                  fontWeight: 700,
+                                  cursor: amt > 0 ? 'pointer' : 'default',
+                                  transition: 'all 0.2s ease',
+                                  fontFamily: 'var(--font-outfit)'
+                                }}
+                                onMouseEnter={(e) => {
+                                  if (amt > 0) {
+                                    e.currentTarget.style.background = 'rgba(157, 78, 221, 0.2)';
+                                  }
+                                }}
+                                onMouseLeave={(e) => {
+                                  if (amt > 0) {
+                                    e.currentTarget.style.background = 'rgba(157, 78, 221, 0.12)';
+                                  }
+                                }}
+                              >
+                                Withdraw
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Withdraw log panel */}
+                {withdrawLogs.length > 0 && (
+                  <div style={{ marginTop: '10px' }}>
+                    <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--purple-light)', marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Soroban RPC Withdraw Console</span>
+                      {isWithdrawing && <RefreshCw size={8} className="animate-spin" />}
+                    </div>
+                    
+                    <div className="stellar-live-logger" style={{ maxHeight: '120px' }}>
+                      {withdrawLogs.map((log, index) => (
+                        <div key={index} className={`log-entry ${log.type}`}>
+                          <ChevronRight size={10} style={{ marginTop: '3px', flexShrink: 0 }} />
+                          <span>{log.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
             {isSandboxMode ? (
               <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -1432,6 +2328,90 @@ function App() {
                     <span>Micro-allocation rules balanced perfectly! (100%)</span>
                   </div>
                 )}
+
+                {/* Sync to Soroban Smart Contract */}
+                {!isSandboxMode && totalAllocationPct === 100 && (
+                  <div style={{
+                    marginTop: '20px',
+                    padding: '20px',
+                    background: 'linear-gradient(135deg, rgba(157, 78, 221, 0.05) 0%, rgba(10, 6, 22, 0.4) 100%)',
+                    border: '1px solid rgba(157, 78, 221, 0.2)',
+                    borderRadius: '16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '14px'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Sparkles size={14} style={{ color: 'var(--purple-light)' }} />
+                        <span style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', color: '#fff' }}>Soroban Contract Sync</span>
+                      </div>
+                      <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>Contract Ready</span>
+                    </div>
+
+                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+                      Sync your micro-allocation percentages to the self-budgeting smart contract. Your next stablecoin salary receipt will be automatically split on-chain.
+                    </p>
+
+                    <button
+                      onClick={handleSyncAllocations}
+                      disabled={isSyncingAllocations}
+                      className="btn-primary"
+                      style={{
+                        background: 'linear-gradient(135deg, #a020f0 0%, #9d4edd 100%)',
+                        border: '1px solid rgba(157, 78, 221, 0.4)',
+                        boxShadow: '0 0 15px rgba(157, 78, 221, 0.3)',
+                        padding: '10px',
+                        fontWeight: 800,
+                        fontSize: '12px',
+                        margin: 0
+                      }}
+                    >
+                      <RefreshCw size={14} className={isSyncingAllocations ? "animate-spin" : ""} />
+                      <span>{isSyncingAllocations ? 'Syncing to Soroban...' : 'Sync Allocations to Soroban Contract'}</span>
+                    </button>
+
+                    {/* Sync Success Display */}
+                    {showSyncSuccess && (
+                      <div style={{
+                        background: 'rgba(0, 245, 212, 0.08)',
+                        border: '1px solid rgba(0, 245, 212, 0.25)',
+                        borderRadius: '12px',
+                        padding: '10px',
+                        fontSize: '10px',
+                        color: 'var(--success-color)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '4px'
+                      }}>
+                        <div style={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <CheckCircle size={12} />
+                          <span>On-Chain Sync Successful!</span>
+                        </div>
+                        <div style={{ wordBreak: 'break-all', fontFamily: 'monospace', opacity: 0.8 }}>
+                          Tx: {syncTxHash}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Sync logs console */}
+                    {syncLogs.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: '9px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--purple-light)', marginBottom: '6px' }}>
+                          Stellar Ledger Sync Logs
+                        </div>
+                        <div className="stellar-live-logger" style={{ maxHeight: '120px' }}>
+                          {syncLogs.map((log, index) => (
+                            <div key={index} className={`log-entry ${log.type}`}>
+                              <ChevronRight size={10} style={{ marginTop: '3px', flexShrink: 0 }} />
+                              <span>{log.text}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1514,8 +2494,9 @@ function App() {
         {/* ==================== TAB 3: TRANSFER & HISTORY ==================== */}
         {activeTab === 'transfer' && (
           <>
-            {/* XLM / USDC Transfer Form */}
-            <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              {/* XLM / USDC Transfer Form */}
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
               <div className="panel-title">
                 <Send size={22} className="text-purple-accent" />
                 <span>Submit Stellar Transfer</span>
@@ -1593,6 +2574,258 @@ function App() {
                 </div>
               )}
             </div>
+
+            {/* Create Soroban Smart Invoice Form */}
+            {!isSandboxMode && (
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div className="panel-title">
+                  <Plus size={22} className="text-purple-accent" />
+                  <span>Create Soroban Smart Invoice</span>
+                </div>
+
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+                  Bill your client directly through the self-budgeting smart contract. When paid, funds will be auto-split according to your on-chain allocations.
+                </p>
+
+                <form onSubmit={handleCreateInvoice} className="invoice-form" style={{ margin: 0 }}>
+                  <div className="form-group">
+                    <label>Client Stellar Address (Payer)</label>
+                    <input 
+                      type="text" 
+                      value={invoiceClientAddress}
+                      onChange={(e) => setInvoiceClientAddress(e.target.value)}
+                      placeholder="e.g. GB28... or GC2W..."
+                      className="form-input"
+                      style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                      required
+                    />
+                  </div>
+
+                  <div className="input-row">
+                    <div className="form-group">
+                      <label>Amount (USDC)</label>
+                      <input 
+                        type="number"
+                        step="any"
+                        min="0.01"
+                        value={invoiceAmountUsdc}
+                        onChange={(e) => setInvoiceAmountUsdc(e.target.value)}
+                        placeholder="e.g. 500"
+                        className="form-input"
+                        required
+                      />
+                    </div>
+
+                    <div className="form-group">
+                      <label>Description</label>
+                      <input 
+                        type="text" 
+                        value={invoiceDescription}
+                        onChange={(e) => setInvoiceDescription(e.target.value)}
+                        placeholder="e.g. Monthly Retainer"
+                        className="form-input"
+                      />
+                    </div>
+                  </div>
+
+                  <button type="submit" disabled={isCreatingInvoice} className="btn-primary" style={{ marginTop: '8px' }}>
+                    <Plus size={16} />
+                    <span>{isCreatingInvoice ? 'Creating Invoice...' : 'Create Smart Invoice'}</span>
+                  </button>
+                </form>
+
+                {/* Invoice Creation Logs */}
+                {invoiceLogs.length > 0 && (
+                  <div style={{ marginTop: '10px' }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--purple-light)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Invoice Creation Console</span>
+                      {isCreatingInvoice && <RefreshCw size={10} className="animate-spin" />}
+                    </div>
+                    <div className="stellar-live-logger" style={{ maxHeight: '150px' }}>
+                      {invoiceLogs.map((log, index) => (
+                        <div key={index} className={`log-entry ${log.type}`}>
+                          <ChevronRight size={10} style={{ marginTop: '3px', flexShrink: 0 }} />
+                          <span>{log.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            {/* Pay & List Soroban Smart Invoices */}
+            {!isSandboxMode && (
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div className="panel-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <Coins size={22} className="text-purple-accent" />
+                    <span>Soroban Smart Invoices</span>
+                  </div>
+                  {isLoadingInvoices && <RefreshCw size={14} className="animate-spin text-purple-light" />}
+                </div>
+
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.4 }}>
+                  Manage, track, and pay active freelance smart contract invoices directly. Paying an invoice automatically splits the USDC amount among the worker's allocations.
+                </p>
+
+                {/* Quick Pay Invoice Form */}
+                <div style={{
+                  background: 'rgba(10, 6, 22, 0.4)',
+                  border: '1px solid var(--border-light)',
+                  borderRadius: '16px',
+                  padding: '16px'
+                }}>
+                  <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', color: 'var(--purple-light)', marginBottom: '8px' }}>
+                    Quick Pay Invoice
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input 
+                      type="number"
+                      placeholder="Enter Invoice ID"
+                      value={invoiceIdToPay}
+                      onChange={(e) => setInvoiceIdToPay(e.target.value)}
+                      style={{
+                        flex: 1,
+                        background: 'rgba(255,255,255,0.05)',
+                        border: '1px solid var(--border-light)',
+                        color: '#fff',
+                        borderRadius: '8px',
+                        padding: '8px 12px',
+                        fontSize: '13px',
+                        outline: 'none',
+                        fontFamily: 'var(--font-outfit)'
+                      }}
+                    />
+                    <button
+                      onClick={() => handlePayInvoice(invoiceIdToPay)}
+                      disabled={isPayingInvoice || !invoiceIdToPay}
+                      className="btn-primary"
+                      style={{ padding: '8px 16px', fontSize: '12px', margin: 0 }}
+                    >
+                      {isPayingInvoice ? 'Paying...' : 'Pay Invoice'}
+                    </button>
+                  </div>
+
+                  {payInvoiceLogs.length > 0 && (
+                    <div style={{ marginTop: '10px' }}>
+                      <div className="stellar-live-logger" style={{ maxHeight: '120px' }}>
+                        {payInvoiceLogs.map((log, index) => (
+                          <div key={index} className={`log-entry ${log.type}`}>
+                            <ChevronRight size={10} style={{ marginTop: '3px', flexShrink: 0 }} />
+                            <span>{log.text}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Worker Invoices Feed */}
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+                    On-Chain Invoices Feed
+                  </div>
+
+                  {workerInvoices.length === 0 ? (
+                    <div style={{
+                      padding: '24px 12px',
+                      textAlign: 'center',
+                      background: 'rgba(255,255,255,0.01)',
+                      borderRadius: '12px',
+                      border: '1px dashed var(--border-light)',
+                      color: 'var(--text-dim)',
+                      fontSize: '12px'
+                    }}>
+                      No on-chain invoices found for your wallet address.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '250px', overflowY: 'auto', paddingRight: '4px' }}>
+                      {workerInvoices.map((inv) => {
+                        const isWorker = inv.worker === walletAddress;
+                        const status = inv.status;
+                        const displayStatus = (status === 'Unpaid' || status === '0' || status === 0) ? 'Unpaid' : 'Paid';
+                        const isUnpaid = displayStatus === 'Unpaid';
+
+                        return (
+                          <div key={inv.id} style={{
+                            background: 'rgba(255, 255, 255, 0.02)',
+                            border: '1px solid rgba(255, 255, 255, 0.04)',
+                            borderLeft: `4px solid ${isUnpaid ? 'var(--warning-color)' : 'var(--success-color)'}`,
+                            borderRadius: '12px',
+                            padding: '12px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '8px'
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div>
+                                <span style={{ fontSize: '11px', fontWeight: 800, color: '#fff' }}>
+                                  INVOICE #{inv.id}
+                                </span>
+                                <span style={{
+                                  marginLeft: '8px',
+                                  padding: '2px 6px',
+                                  borderRadius: '4px',
+                                  fontSize: '9px',
+                                  fontWeight: 800,
+                                  background: isUnpaid ? 'rgba(255, 159, 28, 0.15)' : 'rgba(0, 245, 212, 0.15)',
+                                  color: isUnpaid ? 'var(--warning-color)' : 'var(--success-color)'
+                                }}>
+                                  {displayStatus}
+                                </span>
+                              </div>
+                              <span style={{ fontSize: '14px', fontWeight: 800, color: '#fff' }}>
+                                ${inv.amountUsdc.toLocaleString()} USDC
+                              </span>
+                            </div>
+
+                            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                              {inv.description}
+                            </div>
+
+                            <div style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              fontSize: '10px',
+                              color: 'var(--text-dim)',
+                              borderTop: '1px solid rgba(255,255,255,0.03)',
+                              paddingTop: '6px'
+                            }}>
+                              <span>
+                                {isWorker ? `Client: ${inv.client.slice(0,6)}...${inv.client.slice(-6)}` : `Worker: ${inv.worker.slice(0,6)}...${inv.worker.slice(-6)}`}
+                              </span>
+                              {!isWorker && isUnpaid && (
+                                <button
+                                  onClick={() => handlePayInvoice(inv.id)}
+                                  disabled={isPayingInvoice}
+                                  style={{
+                                    background: 'var(--success-color)',
+                                    border: 'none',
+                                    color: '#06040d',
+                                    padding: '2px 8px',
+                                    borderRadius: '4px',
+                                    fontWeight: 800,
+                                    cursor: 'pointer',
+                                    fontSize: '9px',
+                                    fontFamily: 'var(--font-outfit)'
+                                  }}
+                                >
+                                  Pay Now
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Per-Account Transaction History from Horizon */}
             <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -1741,9 +2974,10 @@ function App() {
                 </div>
               )}
             </div>
-          </>
-        )}
-      </div>
+          </div>
+        </>
+      )}
+    </div>
 
       {/* TEAM CREDITS MODAL PANEL */}
       <footer className="team-credits-card">
