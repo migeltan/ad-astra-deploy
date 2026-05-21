@@ -1,4 +1,3 @@
-import { setFixedBudget, setAllocations, createInvoice, payInvoice, getBuckets } from './services/stellar';
 import React, { useState, useEffect } from 'react';
 import { 
   Wallet, 
@@ -17,7 +16,13 @@ import {
   History,
   Lock,
   ArrowDownLeft,
-  Calculator
+  Calculator,
+  Heart,
+  Home,
+  Plus,
+  Trash2,
+  Edit2,
+  Check
 } from 'lucide-react';
 
 function App() {
@@ -26,6 +31,7 @@ function App() {
   const [isEditingWallet, setIsEditingWallet] = useState(false);
   const [walletInputVal, setWalletInputVal] = useState('');
   const [landingError, setLandingError] = useState('');
+  const [isSandboxMode, setIsSandboxMode] = useState(false);
   
   // Network Selection
   const [network, setNetwork] = useState('testnet'); // Default to testnet
@@ -50,20 +56,34 @@ function App() {
   const [budgetAmount, setBudgetAmount] = useState(0); // Chosen amount to budget in USDC
   
   // Micro-allocation Percentages of the budgeted amount (Must sum to 100%)
-  const [allocations, setAllocations] = useState({
-    gov: 20,       // Gov Welfare (SSS/PhilHealth/PagIBIG)
-    tax: 15,       // Income Tax Reserve
-    bills: 25,     // Bills & Utilities
-    spendable: 40  // Spendable Cash
-  });
+  const [allocations, setAllocations] = useState([
+    { id: 'sss', label: 'SSS', pct: 15, color: '#ff9f1c', iconName: 'ShieldAlert', isCustom: false },
+    { id: 'philhealth', label: 'Philhealth', pct: 10, color: '#00f5d4', iconName: 'Heart', isCustom: false },
+    { id: 'pagibig', label: 'Pag-IBIG', pct: 10, color: '#3a86ff', iconName: 'Home', isCustom: false },
+    { id: 'tax', label: 'Income Tax Return', pct: 15, color: '#ff0055', iconName: 'Zap', isCustom: false },
+    { id: 'bills', label: 'Bills & Utilities', pct: 20, color: '#9d4edd', iconName: 'RefreshCw', isCustom: false },
+    { id: 'spendable', label: 'Spendable Cash', pct: 30, color: '#ff007f', iconName: 'Coins', isCustom: false }
+  ]);
 
-  // Allocation Config (Labels, Colors, Icons)
-  const allocationConfig = {
-    gov: { label: 'Gov Welfare (SSS/PhilHealth/PagIBIG)', color: '#ff9f1c', icon: ShieldAlert },
-    tax: { label: 'Income Tax Reserve', color: '#ff007f', icon: Zap },
-    bills: { label: 'Bills & Utilities', color: '#3a86ff', icon: RefreshCw },
-    spendable: { label: 'Spendable Cash', color: '#9d4edd', icon: Coins }
+  // Map iconName to standard Lucide React components
+  const iconMap = {
+    ShieldAlert,
+    Heart,
+    Home,
+    Zap,
+    RefreshCw,
+    Coins,
+    Sparkles
   };
+
+  const customColors = ['#00b4d8', '#ff70a6', '#ff9770', '#ffd670', '#80ffdb', '#e0aaff', '#9d4edd'];
+
+  // State for adding/editing custom allocations
+  const [editingId, setEditingId] = useState(null);
+  const [editingName, setEditingName] = useState('');
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newAllocName, setNewAllocName] = useState('');
+  const [newAllocPct, setNewAllocPct] = useState(10);
 
   // Transfer Form States
   const [transferRecipient, setTransferRecipient] = useState('');
@@ -73,18 +93,12 @@ function App() {
   const [transferLogs, setTransferLogs] = useState([]);
   const [showTransferSuccess, setShowTransferSuccess] = useState(false);
   const [lastTxHash, setLastTxHash] = useState('');
-  // Contract integration states
-  const [isDeployingBudget, setIsDeployingBudget] = useState(false);
-  const [contractLogs, setContractLogs] = useState([]);
-  const [contractTxHash, setContractTxHash] = useState('');
-  const [showContractSuccess, setShowContractSuccess] = useState(false);
-  const [buckets, setBuckets] = useState([]);
 
   // Fetch Live Balance from Stellar Horizon Ledger
   useEffect(() => {
     const fetchBalance = async () => {
       const cleanAddress = walletAddress.trim();
-      if (!cleanAddress || cleanAddress.length < 30) return;
+      if (!cleanAddress || cleanAddress.length < 30 || isSandboxMode) return;
       
       setIsLoadingBalance(true);
       setBalanceError('');
@@ -150,7 +164,7 @@ function App() {
   useEffect(() => {
     const fetchHistory = async () => {
       const cleanAddress = walletAddress.trim();
-      if (!cleanAddress || cleanAddress.length < 30) return;
+      if (!cleanAddress || cleanAddress.length < 30 || isSandboxMode) return;
 
       setIsLoadingHistory(true);
       const horizonUrl = network === 'mainnet'
@@ -180,67 +194,50 @@ function App() {
     fetchHistory();
   }, [walletAddress, network]);
 
+  // Clamp budgetAmount in sandbox mode when balances.usdc changes
+  useEffect(() => {
+    if (isSandboxMode && budgetAmount > balances.usdc) {
+      setBudgetAmount(balances.usdc);
+    }
+  }, [balances.usdc, isSandboxMode, budgetAmount]);
+
   // Calculate sum of micro-allocations
-  const totalAllocationPct = allocations.gov + allocations.tax + allocations.bills + allocations.spendable;
-
-  // Deploy budget and allocations to real blockchain
-const handleDeployBudget = async () => {
-  if (totalAllocationPct !== 100) {
-    alert("Allocations must equal 100% before deploying!");
-    return;
-  }
-  if (budgetAmount <= 0) {
-    alert("Please set a budget amount first!");
-    return;
-  }
-
-  setIsDeployingBudget(true);
-  setContractLogs([]);
-  setShowContractSuccess(false);
-
-  const log = (msg) => setContractLogs(prev => [...prev, msg]);
-
-  try {
-    log('🚀 Starting blockchain deployment...');
-    const hash1 = await setFixedBudget(budgetAmount, log);
-    log(`✅ Fixed budget set! TX: ${hash1}`);
-
-    await new Promise(r => setTimeout(r, 5000));
-
-    const hash2 = await setAllocations(allocations, log);
-    log(`✅ Allocations set! TX: ${hash2}`);
-
-    log('📦 Fetching updated buckets...');
-    const fetchedBuckets = await getBuckets();
-    setBuckets(fetchedBuckets);
-
-    setContractTxHash(hash2);
-    setShowContractSuccess(true);
-    log('🎉 All done! Budget deployed to Stellar blockchain!');
-  } catch (err) {
-    log(`❌ Error: ${err.message}`);
-  } finally {
-    setIsDeployingBudget(false);
-  }
-};
+  const totalAllocationPct = allocations.reduce((sum, item) => sum + item.pct, 0);
 
   // Auto-balance Allocations to equal 100%
   const handleAutoBalance = () => {
-    setAllocations({
-      gov: 20,
-      tax: 15,
-      bills: 25,
-      spendable: 40
-    });
+    const total = allocations.reduce((sum, item) => sum + item.pct, 0);
+    if (total === 0) {
+      const equalShare = Math.floor(100 / allocations.length);
+      const updated = allocations.map((item, idx) => ({
+        ...item,
+        pct: idx === allocations.length - 1 ? 100 - equalShare * (allocations.length - 1) : equalShare
+      }));
+      setAllocations(updated);
+    } else {
+      let runningSum = 0;
+      const updated = allocations.map((item, idx) => {
+        if (idx === allocations.length - 1) {
+          return {
+            ...item,
+            pct: Math.max(0, 100 - runningSum)
+          };
+        }
+        const scaled = Math.round((item.pct / total) * 100);
+        runningSum += scaled;
+        return {
+          ...item,
+          pct: scaled
+        };
+      });
+      setAllocations(updated);
+    }
   };
 
   // Update a single micro-allocation percentage
-  const handleAllocationChange = (key, value) => {
+  const handleAllocationChange = (id, value) => {
     const val = parseInt(value, 10) || 0;
-    setAllocations(prev => ({
-      ...prev,
-      [key]: val
-    }));
+    setAllocations(prev => prev.map(item => item.id === id ? { ...item, pct: val } : item));
   };
 
   // Trigger simulated transfer with live console logging
@@ -336,13 +333,49 @@ const handleDeployBudget = async () => {
     setWalletAddress(addr);
   };
 
-  // Handle sandbox launch with a clean testnet address
+  // Handle sandbox launch with simulated data and editable controls
   const handleSandboxLaunch = () => {
     setLandingError('');
-    const sandboxAddr = 'GC2WNMONVHE5XWIUIMSAVVZ7NYKGWMCMHSI5JP24ZIH7FRTJ3I24IRJG';
-    setWalletAddress(sandboxAddr);
-    setWalletInputVal(sandboxAddr);
-    setNetwork('testnet');
+    setIsSandboxMode(true);
+    setWalletAddress('SANDBOX_WALLET');
+    setBalances({
+      xlm: 1250.50,
+      usdc: 850.00,
+      php: 850.00 * 57
+    });
+    setBudgetAmount(350.00);
+    setTransactions([
+      {
+        id: 'sb_tx_1',
+        type: 'payment',
+        amount: '125.0000000',
+        asset_type: 'credit_alphanum4',
+        asset_code: 'USDC',
+        from: 'GCSANDBOXRECIPIENT11234567890',
+        to: 'SANDBOX_WALLET',
+        created_at: new Date(Date.now() - 3600000 * 2).toISOString(), // 2 hours ago
+        transaction_hash: '5f9b8c7d6a5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c'
+      },
+      {
+        id: 'sb_tx_2',
+        type: 'payment',
+        amount: '45.0000000',
+        asset_type: 'native',
+        from: 'SANDBOX_WALLET',
+        to: 'GCSANDBOXRECIPIENT22345678901',
+        created_at: new Date(Date.now() - 3600000 * 24).toISOString(), // 1 day ago
+        transaction_hash: 'e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d8'
+      },
+      {
+        id: 'sb_tx_3',
+        type: 'create_account',
+        starting_balance: '1000.0000000',
+        funder: 'GCSANDBOXSPONSOR99999999999',
+        account: 'SANDBOX_WALLET',
+        created_at: new Date(Date.now() - 3600000 * 48).toISOString(), // 2 days ago
+        transaction_hash: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2'
+      }
+    ]);
   };
 
   // Connect Account Layout
@@ -399,10 +432,10 @@ const handleDeployBudget = async () => {
           <div className="landing-sandbox-box" onClick={handleSandboxLaunch}>
             <div className="landing-sandbox-title">
               <Sparkles size={16} />
-              <span>Launch with Sandbox Wallet Address</span>
+              <span>Launch with Sandbox Wallet</span>
             </div>
             <p className="landing-sandbox-desc">
-              Instantly view the dashboard using a standard Stellar testnet address (GC2WNMON...) containing live ledger balances.
+              Instantly launch a local visual sandbox profile to test out and custom configure the budgeting allocator.
             </p>
           </div>
         </div>
@@ -427,27 +460,81 @@ const handleDeployBudget = async () => {
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           {/* Network Selection Selector */}
-          <select 
-            value={network}
-            onChange={(e) => setNetwork(e.target.value)}
-            style={{
-              background: 'rgba(157, 78, 221, 0.12)',
-              border: '1px solid var(--border-light)',
-              color: 'var(--purple-light)',
-              borderRadius: '12px',
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 700,
-              fontFamily: 'var(--font-outfit)',
-              outline: 'none',
-              cursor: 'pointer'
-            }}
-          >
-            <option value="testnet" style={{ background: '#0b071a' }}>Testnet</option>
-            <option value="mainnet" style={{ background: '#0b071a' }}>Mainnet</option>
-          </select>
+          {!isSandboxMode && (
+            <select 
+              value={network}
+              onChange={(e) => setNetwork(e.target.value)}
+              style={{
+                background: 'rgba(157, 78, 221, 0.12)',
+                border: '1px solid var(--border-light)',
+                color: 'var(--purple-light)',
+                borderRadius: '12px',
+                padding: '6px 12px',
+                fontSize: '12px',
+                fontWeight: 700,
+                fontFamily: 'var(--font-outfit)',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="testnet" style={{ background: '#0b071a' }}>Testnet</option>
+              <option value="mainnet" style={{ background: '#0b071a' }}>Mainnet</option>
+            </select>
+          )}
 
-          {isEditingWallet ? (
+          {isSandboxMode ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div 
+                className="wallet-badge" 
+                style={{
+                  cursor: 'default',
+                  borderColor: 'rgba(157, 78, 221, 0.4)',
+                  background: 'linear-gradient(135deg, rgba(157, 78, 221, 0.15) 0%, rgba(10, 6, 22, 0.6) 100%)',
+                  boxShadow: '0 0 10px rgba(157, 78, 221, 0.2)'
+                }}
+              >
+                <div className="wallet-dot" style={{ backgroundColor: '#9d4edd', boxShadow: '0 0 8px #9d4edd' }}></div>
+                <span className="wallet-address" style={{ color: 'var(--purple-light)', fontWeight: 800 }}>
+                  SANDBOX MODE ACTIVE
+                </span>
+              </div>
+              
+              <button 
+                onClick={() => {
+                  setWalletAddress('');
+                  setWalletInputVal('');
+                  setBalances({ xlm: 0, usdc: 0, php: 0 });
+                  setTransactions([]);
+                  setBudgetAmount(0);
+                  setIsSandboxMode(false);
+                }}
+                title="Exit Sandbox"
+                style={{
+                  background: 'rgba(255, 0, 85, 0.1)',
+                  border: '1px solid rgba(255, 0, 85, 0.25)',
+                  color: '#ff0055',
+                  borderRadius: '12px',
+                  width: '34px',
+                  height: '34px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  transition: 'var(--transition-smooth)'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 0, 85, 0.2)';
+                  e.currentTarget.style.borderColor = '#ff0055';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 0, 85, 0.1)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 0, 85, 0.25)';
+                }}
+              >
+                <LogOut size={14} />
+              </button>
+            </div>
+          ) : isEditingWallet ? (
             <div className="wallet-badge-edit" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <input 
                 type="text"
@@ -505,6 +592,7 @@ const handleDeployBudget = async () => {
                   setBalances({ xlm: 0, usdc: 0, php: 0 });
                   setTransactions([]);
                   setBudgetAmount(0);
+                  setIsSandboxMode(false);
                 }}
                 title="Disconnect Wallet"
                 style={{
@@ -627,10 +715,10 @@ const handleDeployBudget = async () => {
             <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
               <div className="panel-title">
                 <Lock size={22} style={{ color: 'var(--success-color)' }} />
-                <span>Secure Personal Savings Vault (Direct Address Balance)</span>
+                <span>Secure Personal Savings Vault {isSandboxMode ? '(Direct Sandbox Balance)' : '(Direct Address Balance)'}</span>
               </div>
 
-              {balanceError && (
+              {!isSandboxMode && balanceError && (
                 <div className="validation-warning" style={{ border: '1px solid rgba(255, 159, 28, 0.3)' }}>
                   <ShieldAlert size={16} />
                   <span style={{ fontSize: '11px' }}>{balanceError}</span>
@@ -732,80 +820,188 @@ const handleDeployBudget = async () => {
                   <ShieldAlert size={16} className="text-success-color" />
                   Untouchable Base Rule
                 </strong>
-                The aggregate balance displayed above corresponds strictly to your live, on-chain public address holdings. The Kwagee dashboard treats this core value as safe and untouched from daily spend obligations until you explicitly choose to allocate an amount to budget.
+                The aggregate balance displayed above corresponds strictly to your {isSandboxMode ? 'customized sandbox wallet balances' : 'live, on-chain public address holdings'}. The Kwagee dashboard treats this core value as safe and untouched from daily spend obligations until you explicitly choose to allocate an amount to budget.
               </div>
             </div>
 
-            <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-              <div className="panel-title">
-                <Wallet size={20} className="text-purple-accent" />
-                <span>Stellar Address Information</span>
-              </div>
+            {isSandboxMode ? (
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div className="panel-title">
+                  <Sparkles size={20} className="text-purple-accent" />
+                  <span>Sandbox Wallet Editor</span>
+                </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-light)', padding: '16px', borderRadius: '14px' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Connected Public Key
-                  </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                    Configure your local simulated sandbox balances. All figures will instantly reflect across your vault calculations, budget allocations, and visual transfer limitations.
+                  </p>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ color: 'var(--text-secondary)', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase' }}>
+                      Simulated USDC Balance (USD)
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                      <input 
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={balances.usdc}
+                        onChange={(e) => {
+                          const newUsdc = Math.max(0, parseFloat(e.target.value) || 0);
+                          setBalances(prev => ({
+                            ...prev,
+                            usdc: newUsdc,
+                            php: newUsdc * 57
+                          }));
+                        }}
+                        className="form-input"
+                        style={{
+                          background: 'rgba(255,255,255,0.05)',
+                          border: '1px solid var(--border-light)',
+                          color: '#fff',
+                          borderRadius: '12px',
+                          padding: '10px 14px',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          fontFamily: 'var(--font-outfit)',
+                          flex: 1
+                        }}
+                      />
+                      <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--purple-light)' }}>USDC</span>
+                    </div>
+                  </div>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label style={{ color: 'var(--text-secondary)', fontWeight: 700, fontSize: '11px', textTransform: 'uppercase' }}>
+                      Simulated XLM Balance
+                    </label>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                      <input 
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={balances.xlm}
+                        onChange={(e) => {
+                          const newXlm = Math.max(0, parseFloat(e.target.value) || 0);
+                          setBalances(prev => ({
+                            ...prev,
+                            xlm: newXlm
+                          }));
+                        }}
+                        className="form-input"
+                        style={{
+                          background: 'rgba(255,255,255,0.05)',
+                          border: '1px solid var(--border-light)',
+                          color: '#fff',
+                          borderRadius: '12px',
+                          padding: '10px 14px',
+                          fontSize: '14px',
+                          fontWeight: 700,
+                          fontFamily: 'var(--font-outfit)',
+                          flex: 1
+                        }}
+                      />
+                      <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--success-color)' }}>XLM</span>
+                    </div>
+                  </div>
+
                   <div style={{ 
-                    fontFamily: 'monospace', 
-                    fontSize: '12px', 
-                    color: '#fff', 
-                    wordBreak: 'break-all', 
-                    marginTop: '6px',
-                    background: 'rgba(255,255,255,0.03)',
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(255,255,255,0.05)'
+                    background: 'rgba(157, 78, 221, 0.05)', 
+                    border: '1px solid rgba(157, 78, 221, 0.15)', 
+                    padding: '12px', 
+                    borderRadius: '12px',
+                    fontSize: '11px',
+                    color: 'var(--text-secondary)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                    marginTop: '6px'
                   }}>
-                    {walletAddress}
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Simulated PHP Value:</span>
+                      <span style={{ color: 'var(--success-color)', fontWeight: 700 }}>
+                        ₱{(balances.usdc * 57).toLocaleString(undefined, { maximumFractionDigits: 0 })} PHP
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Off-Ramp Conversion Rate:</span>
+                      <span>1 USDC ≈ 57.00 PHP</span>
+                    </div>
                   </div>
                 </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 8px' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>Horizon Ledger Node:</span>
-                  <span style={{ color: 'var(--purple-light)', fontWeight: 600 }}>
-                    {network === 'mainnet' ? 'Stellar Horizon (Mainnet)' : 'Stellar Horizon (Testnet)'}
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 8px' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>Off-Ramp Rate:</span>
-                  <span style={{ color: 'var(--success-color)', fontWeight: 700 }}>
-                    1 USDC ≈ 57.00 PHP
-                  </span>
-                </div>
-
-                {network === 'testnet' && (
-                  <button 
-                    onClick={async () => {
-                      setIsLoadingBalance(true);
-                      try {
-                        const res = await fetch(`https://friendbot.stellar.org/?addr=${walletAddress.trim()}`);
-                        if (res.ok) {
-                          alert("Account successfully funded with 10,000 testnet XLM!");
-                          // Trigger reload by slightly changing state
-                          setWalletAddress(prev => prev + ' ');
-                          setTimeout(() => setWalletAddress(prev => prev.trim()), 50);
-                        } else {
-                          alert("Friendbot rate limited or failed. Try again in a minute.");
-                        }
-                      } catch (e) {
-                        alert("Friendbot funding failed.");
-                      } finally {
-                        setIsLoadingBalance(false);
-                      }
-                    }}
-                    disabled={isLoadingBalance}
-                    className="btn-primary"
-                    style={{ marginTop: '10px' }}
-                  >
-                    <RefreshCw size={14} className={isLoadingBalance ? "animate-spin" : ""} />
-                    <span>{isLoadingBalance ? "Requesting..." : "Get 10,000 Testnet XLM (Friendbot)"}</span>
-                  </button>
-                )}
               </div>
-            </div>
+            ) : (
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div className="panel-title">
+                  <Wallet size={20} className="text-purple-accent" />
+                  <span>Stellar Address Information</span>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-light)', padding: '16px', borderRadius: '14px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700 }}>
+                      Connected Public Key
+                    </span>
+                    <div style={{ 
+                      fontFamily: 'monospace', 
+                      fontSize: '12px', 
+                      color: '#fff', 
+                      wordBreak: 'break-all', 
+                      marginTop: '6px',
+                      background: 'rgba(255,255,255,0.03)',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(255,255,255,0.05)'
+                    }}>
+                      {walletAddress}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 8px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Horizon Ledger Node:</span>
+                    <span style={{ color: 'var(--purple-light)', fontWeight: 600 }}>
+                      {network === 'mainnet' ? 'Stellar Horizon (Mainnet)' : 'Stellar Horizon (Testnet)'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', padding: '4px 8px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>Off-Ramp Rate:</span>
+                    <span style={{ color: 'var(--success-color)', fontWeight: 700 }}>
+                      1 USDC ≈ 57.00 PHP
+                    </span>
+                  </div>
+
+                  {network === 'testnet' && (
+                    <button 
+                      onClick={async () => {
+                        setIsLoadingBalance(true);
+                        try {
+                          const res = await fetch(`https://friendbot.stellar.org/?addr=${walletAddress.trim()}`);
+                          if (res.ok) {
+                            alert("Account successfully funded with 10,000 testnet XLM!");
+                            // Trigger reload by slightly changing state
+                            setWalletAddress(prev => prev + ' ');
+                            setTimeout(() => setWalletAddress(prev => prev.trim()), 50);
+                          } else {
+                            alert("Friendbot rate limited or failed. Try again in a minute.");
+                          }
+                        } catch (e) {
+                          alert("Friendbot funding failed.");
+                        } finally {
+                          setIsLoadingBalance(false);
+                        }
+                      }}
+                      disabled={isLoadingBalance}
+                      className="btn-primary"
+                      style={{ marginTop: '10px' }}
+                    >
+                      <RefreshCw size={14} className={isLoadingBalance ? "animate-spin" : ""} />
+                      <span>{isLoadingBalance ? "Requesting..." : "Get 10,000 Testnet XLM (Friendbot)"}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -840,9 +1036,12 @@ const handleDeployBudget = async () => {
                   <input 
                     type="range"
                     min="0"
-                    max={balances.usdc > 0 ? Math.max(balances.usdc, budgetAmount) : 1000}
+                    max={isSandboxMode ? balances.usdc : (balances.usdc > 0 ? Math.max(balances.usdc, budgetAmount) : 1000)}
                     value={budgetAmount}
-                    onChange={(e) => setBudgetAmount(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setBudgetAmount(isSandboxMode ? Math.min(val, balances.usdc) : val);
+                    }}
                     style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.1)', outline: 'none', borderRadius: '3px', cursor: 'pointer' }}
                   />
                 </div>
@@ -850,8 +1049,12 @@ const handleDeployBudget = async () => {
                   <input 
                     type="number"
                     min="0"
+                    max={isSandboxMode ? balances.usdc : undefined}
                     value={budgetAmount}
-                    onChange={(e) => setBudgetAmount(Number(e.target.value))}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setBudgetAmount(isSandboxMode ? Math.min(val, balances.usdc) : val);
+                    }}
                     style={{
                       background: 'rgba(255,255,255,0.05)',
                       border: '1px solid var(--border-light)',
@@ -868,6 +1071,13 @@ const handleDeployBudget = async () => {
                   <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--purple-light)' }}>USDC</span>
                 </div>
               </div>
+
+              {isSandboxMode && balances.usdc === 0 && (
+                <div className="validation-warning" style={{ border: '1px solid rgba(157, 78, 221, 0.3)', background: 'rgba(157, 78, 221, 0.05)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Sparkles size={16} style={{ color: 'var(--purple-light)' }} />
+                  <span>Your Sandbox USDC balance is <strong>$0</strong>. Go to the 🏦 <strong>Savings Vault</strong> tab to set your sandbox funds.</span>
+                </div>
+              )}
 
               {/* Side-by-Side Bucket Displays */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
@@ -926,54 +1136,272 @@ const handleDeployBudget = async () => {
                   Micro-Allocations Split (Obligations)
                 </div>
 
-                {Object.keys(allocations).map((key) => {
-                  const config = allocationConfig[key];
-                  const IconComp = config.icon;
+                {allocations.map((item) => {
+                  const IconComp = iconMap[item.iconName] || Coins;
                   return (
-                    <div key={key} className={`slider-group ${key}`}>
-                      <div className="slider-header">
-                        <span className="slider-label">
-                          <IconComp size={16} style={{ color: config.color }} />
-                          {config.label}
+                    <div key={item.id} className={`slider-group ${item.id}`}>
+                      <div className="slider-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="slider-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+                          <IconComp size={16} style={{ color: item.color, flexShrink: 0 }} />
+                          {editingId === item.id ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <input
+                                type="text"
+                                value={editingName}
+                                onChange={(e) => setEditingName(e.target.value)}
+                                style={{
+                                  padding: '2px 6px',
+                                  fontSize: '12px',
+                                  background: 'rgba(10, 6, 22, 0.8)',
+                                  border: '1px solid var(--purple-light)',
+                                  color: '#fff',
+                                  borderRadius: '6px',
+                                  width: '140px',
+                                  outline: 'none',
+                                  fontFamily: 'var(--font-outfit)'
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    if (editingName.trim()) {
+                                      setAllocations(prev => prev.map(a => a.id === item.id ? { ...a, label: editingName.trim() } : a));
+                                      setEditingId(null);
+                                    }
+                                  }
+                                }}
+                                autoFocus
+                              />
+                              <button
+                                onClick={() => {
+                                  if (editingName.trim()) {
+                                    setAllocations(prev => prev.map(a => a.id === item.id ? { ...a, label: editingName.trim() } : a));
+                                    setEditingId(null);
+                                  }
+                                }}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: 'var(--success-color)',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  padding: '2px'
+                                }}
+                              >
+                                <Check size={14} />
+                              </button>
+                            </div>
+                          ) : (
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span>{item.label}</span>
+                              {item.isCustom && (
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '4px' }}>
+                                  <button
+                                    onClick={() => {
+                                      setEditingId(item.id);
+                                      setEditingName(item.label);
+                                    }}
+                                    title="Rename"
+                                    style={{
+                                      background: 'transparent',
+                                      border: 'none',
+                                      color: 'var(--text-dim)',
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      padding: '2px',
+                                      transition: 'color 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.color = '#fff'}
+                                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-dim)'}
+                                  >
+                                    <Edit2 size={11} />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setAllocations(prev => prev.filter(a => a.id !== item.id));
+                                    }}
+                                    title="Delete"
+                                    style={{
+                                      background: 'transparent',
+                                      border: 'none',
+                                      color: 'var(--text-dim)',
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      padding: '2px',
+                                      transition: 'color 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.color = '#ff0055'}
+                                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-dim)'}
+                                  >
+                                    <Trash2 size={11} />
+                                  </button>
+                                </span>
+                              )}
+                            </span>
+                          )}
                         </span>
-                        <span className="slider-pct" style={{ color: config.color }}>
-                          {allocations[key]}%
+                        <span className="slider-pct" style={{ color: item.color, fontWeight: 700, minWidth: '40px', textAlign: 'right' }}>
+                          {item.pct}%
                         </span>
                       </div>
                       <input 
                         type="range"
                         min="0"
                         max="100"
-                        value={allocations[key]}
+                        value={item.pct}
                         className="custom-range"
-                        onChange={(e) => handleAllocationChange(key, e.target.value)}
+                        onChange={(e) => handleAllocationChange(item.id, e.target.value)}
                       />
                     </div>
                   );
                 })}
 
-                {/* Deploy to Blockchain Button */}
-              <button
-                onClick={handleDeployBudget}
-                disabled={isDeployingBudget || totalAllocationPct !== 100}
-                className="btn-primary"
-                style={{ marginTop: '10px' }}
-              >
-                {isDeployingBudget ? <RefreshCw size={16} className="animate-spin" /> : <Zap size={16} />}
-                <span>{isDeployingBudget ? 'Deploying to Blockchain...' : '🚀 Deploy Budget to Blockchain'}</span>
-              </button>
-
-              {/* Contract Logs */}
-              {contractLogs.length > 0 && (
-                <div className="stellar-live-logger" style={{ marginTop: '10px', maxHeight: '200px' }}>
-                  {contractLogs.map((log, i) => (
-                    <div key={i} className="log-entry info">
-                      <ChevronRight size={10} style={{ marginTop: '3px', flexShrink: 0 }} />
-                      <span>{log}</span>
+                {/* Add Custom Allocation Form / Button */}
+                {!showAddForm ? (
+                  <button
+                    onClick={() => {
+                      setShowAddForm(true);
+                      setNewAllocName('');
+                      setNewAllocPct(10);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: 'rgba(157, 78, 221, 0.1)',
+                      border: '1px dashed rgba(157, 78, 221, 0.3)',
+                      color: 'var(--purple-light)',
+                      padding: '8px 14px',
+                      borderRadius: '10px',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      marginTop: '12px',
+                      width: '100%',
+                      justifyContent: 'center',
+                      transition: 'all 0.2s ease',
+                      fontFamily: 'var(--font-outfit)'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(157, 78, 221, 0.2)';
+                      e.currentTarget.style.borderColor = 'rgba(157, 78, 221, 0.5)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(157, 78, 221, 0.1)';
+                      e.currentTarget.style.borderColor = 'rgba(157, 78, 221, 0.3)';
+                    }}
+                  >
+                    <Plus size={14} />
+                    <span>Add Custom Allocation</span>
+                  </button>
+                ) : (
+                  <div style={{
+                    background: 'rgba(10, 6, 22, 0.5)',
+                    border: '1px solid var(--border-light)',
+                    borderRadius: '12px',
+                    padding: '12px',
+                    marginTop: '12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px'
+                  }}>
+                    <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', color: 'var(--purple-light)' }}>
+                      New Custom Allocation
                     </div>
-                  ))}
-                </div>
-              )}
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <input
+                        type="text"
+                        placeholder="Allocation Name (e.g. Vacation)"
+                        value={newAllocName}
+                        onChange={(e) => setNewAllocName(e.target.value)}
+                        style={{
+                          background: 'rgba(255,255,255,0.05)',
+                          border: '1px solid var(--border-light)',
+                          color: '#fff',
+                          borderRadius: '8px',
+                          padding: '6px 10px',
+                          fontSize: '12px',
+                          flex: 2,
+                          minWidth: '130px',
+                          outline: 'none',
+                          fontFamily: 'var(--font-outfit)'
+                        }}
+                      />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: 1, minWidth: '80px' }}>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          placeholder="%"
+                          value={newAllocPct}
+                          onChange={(e) => setNewAllocPct(Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)))}
+                          style={{
+                            background: 'rgba(255,255,255,0.05)',
+                            border: '1px solid var(--border-light)',
+                            color: '#fff',
+                            borderRadius: '8px',
+                            padding: '6px',
+                            fontSize: '12px',
+                            width: '45px',
+                            textAlign: 'center',
+                            outline: 'none',
+                            fontFamily: 'var(--font-outfit)'
+                          }}
+                        />
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>%</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                      <button
+                        onClick={() => setShowAddForm(false)}
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          color: 'var(--text-secondary)',
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          fontFamily: 'var(--font-outfit)'
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => {
+                          const name = newAllocName.trim();
+                          if (!name) {
+                            alert('Please enter a name for the custom allocation.');
+                            return;
+                          }
+                          const color = customColors[allocations.length % customColors.length];
+                          const newAlloc = {
+                            id: 'custom_' + Date.now(),
+                            label: name,
+                            pct: newAllocPct,
+                            color: color,
+                            iconName: 'Coins',
+                            isCustom: true
+                          };
+                          setAllocations(prev => [...prev, newAlloc]);
+                          setShowAddForm(false);
+                        }}
+                        style={{
+                          background: 'var(--purple-light)',
+                          border: 'none',
+                          color: '#fff',
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          fontFamily: 'var(--font-outfit)'
+                        }}
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Validation Indicator */}
                 {totalAllocationPct !== 100 ? (
@@ -991,7 +1419,8 @@ const handleDeployBudget = async () => {
                         borderRadius: '6px',
                         cursor: 'pointer',
                         fontSize: '11px',
-                        fontWeight: 700
+                        fontWeight: 700,
+                        fontFamily: 'var(--font-outfit)'
                       }}
                     >
                       Auto-Balance
@@ -1016,72 +1445,58 @@ const handleDeployBudget = async () => {
               <div className="allocation-chart-panel" style={{ border: 'none', background: 'transparent', padding: 0 }}>
                 <div className="chart-visual" style={{ width: '200px', height: '200px' }}>
                   <svg width="100%" height="100%" viewBox="0 0 160 160">
-                    <circle cx="80" cy="80" r="70" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="8" />
-                    <circle cx="80" cy="80" r="58" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="8" />
-                    <circle cx="80" cy="80" r="46" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="8" />
-                    <circle cx="80" cy="80" r="34" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="8" />
-                    
-                    {/* Ring 1: Spendable */}
-                    <circle cx="80" cy="80" r="70" fill="none" 
-                      stroke={allocationConfig.spendable.color} 
-                      strokeWidth="8" 
-                      strokeDasharray="439.8"
-                      strokeDashoffset={439.8 - (439.8 * allocations.spendable) / 100}
-                      strokeLinecap="round"
-                      transform="rotate(-90 80 80)"
-                      style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
-                    />
-
-                    {/* Ring 2: Bills */}
-                    <circle cx="80" cy="80" r="58" fill="none" 
-                      stroke={allocationConfig.bills.color} 
-                      strokeWidth="8" 
-                      strokeDasharray="364.4"
-                      strokeDashoffset={364.4 - (364.4 * allocations.bills) / 100}
-                      strokeLinecap="round"
-                      transform="rotate(-90 80 80)"
-                      style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
-                    />
-
-                    {/* Ring 3: Gov */}
-                    <circle cx="80" cy="80" r="46" fill="none" 
-                      stroke={allocationConfig.gov.color} 
-                      strokeWidth="8" 
-                      strokeDasharray="289.0"
-                      strokeDashoffset={289.0 - (289.0 * allocations.gov) / 100}
-                      strokeLinecap="round"
-                      transform="rotate(-90 80 80)"
-                      style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
-                    />
-
-                    {/* Ring 4: Tax */}
-                    <circle cx="80" cy="80" r="34" fill="none" 
-                      stroke={allocationConfig.tax.color} 
-                      strokeWidth="8" 
-                      strokeDasharray="213.6"
-                      strokeDashoffset={213.6 - (213.6 * allocations.tax) / 100}
-                      strokeLinecap="round"
-                      transform="rotate(-90 80 80)"
-                      style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
-                    />
+                    {/* Dynamic Concentric Rings */}
+                    {allocations.slice(0, 8).map((item, index) => {
+                      const maxRings = Math.max(allocations.slice(0, 8).length, 6);
+                      const ringWidth = Math.min(8, 48 / maxRings);
+                      const r = 72 - index * (ringWidth + 2.2);
+                      const circ = 2 * Math.PI * r;
+                      const strokeDashoffset = circ - (circ * Math.max(0, Math.min(100, item.pct))) / 100;
+                      return (
+                        <g key={item.id}>
+                          {/* Background ring for track */}
+                          <circle 
+                            cx="80" 
+                            cy="80" 
+                            r={r} 
+                            fill="none" 
+                            stroke="rgba(255,255,255,0.02)" 
+                            strokeWidth={ringWidth} 
+                          />
+                          {/* Active ring */}
+                          <circle 
+                            cx="80" 
+                            cy="80" 
+                            r={r} 
+                            fill="none" 
+                            stroke={item.color} 
+                            strokeWidth={ringWidth} 
+                            strokeDasharray={circ}
+                            strokeDashoffset={strokeDashoffset}
+                            strokeLinecap="round"
+                            transform="rotate(-90 80 80)"
+                            style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
+                          />
+                        </g>
+                      );
+                    })}
                   </svg>
-
+ 
                   <div className="chart-center-info">
                     <div className="chart-center-val">${budgetAmount}</div>
                     <div className="chart-center-lbl">Active Budget</div>
                   </div>
                 </div>
-
+ 
                 <div className="chart-details-list">
-                  {Object.keys(allocations).map((key) => {
-                    const pct = allocations[key];
-                    const valUsd = (budgetAmount * pct) / 100;
+                  {allocations.map((item) => {
+                    const valUsd = (budgetAmount * item.pct) / 100;
                     const valPhp = valUsd * 57;
                     return (
-                      <div key={key} className="chart-detail-item">
+                      <div key={item.id} className="chart-detail-item">
                         <span className="chart-detail-label">
-                          <div className="color-indicator" style={{ backgroundColor: allocationConfig[key].color }}></div>
-                          {key.toUpperCase()} ({pct}%)
+                          <div className="color-indicator" style={{ backgroundColor: item.color }}></div>
+                          {item.label} ({item.pct}%)
                         </span>
                         <div className="chart-detail-values">
                           <span className="chart-detail-val-usd">${valUsd.toFixed(2)} USDC</span>
@@ -1299,22 +1714,26 @@ const handleDeployBudget = async () => {
                             {isOutgoing ? 'To: ' : 'From: '}{displayCounterparty}
                           </span>
 
-                          <a 
-                            href={`https://stellar.expert/explorer/${network === 'mainnet' ? 'public' : 'testnet'}/tx/${tx.transaction_hash}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{
-                              color: 'var(--purple-accent)',
-                              textDecoration: 'none',
-                              fontWeight: 700,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '2px'
-                            }}
-                          >
-                            <span>Explorer</span>
-                            <ArrowUpRight size={10} />
-                          </a>
+                          {isSandboxMode ? (
+                            <span style={{ color: 'var(--text-dim)', fontWeight: 700 }}>Sandbox Tx</span>
+                          ) : (
+                            <a 
+                              href={`https://stellar.expert/explorer/${network === 'mainnet' ? 'public' : 'testnet'}/tx/${tx.transaction_hash}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{
+                                color: 'var(--purple-accent)',
+                                textDecoration: 'none',
+                                fontWeight: 700,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '2px'
+                              }}
+                            >
+                              <span>Explorer</span>
+                              <ArrowUpRight size={10} />
+                            </a>
+                          )}
                         </div>
                       </div>
                     );
@@ -1396,16 +1815,31 @@ const handleDeployBudget = async () => {
             </div>
           </div>
 
-          <a 
-            href={`https://stellar.expert/explorer/${network === 'mainnet' ? 'public' : 'testnet'}/tx/${lastTxHash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn-primary"
-            style={{ textDecoration: 'none', padding: '10px' }}
-          >
-            <span>Verify on Stellar Expert</span>
-            <ArrowUpRight size={14} />
-          </a>
+          {isSandboxMode ? (
+            <div style={{
+              textAlign: 'center',
+              padding: '12px',
+              background: 'rgba(157, 78, 221, 0.1)',
+              border: '1px solid rgba(157, 78, 221, 0.25)',
+              borderRadius: '12px',
+              color: 'var(--purple-light)',
+              fontWeight: 700,
+              fontSize: '13px'
+            }}>
+              Sandbox Transaction Recorded Visually
+            </div>
+          ) : (
+            <a 
+              href={`https://stellar.expert/explorer/${network === 'mainnet' ? 'public' : 'testnet'}/tx/${lastTxHash}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-primary"
+              style={{ textDecoration: 'none', padding: '10px' }}
+            >
+              <span>Verify on Stellar Expert</span>
+              <ArrowUpRight size={14} />
+            </a>
+          )}
 
           <button 
             onClick={() => setShowTransferSuccess(false)}
