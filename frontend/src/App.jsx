@@ -46,7 +46,8 @@ import {
   Operation, 
   Asset,
   Account,
-  Horizon
+  Horizon,
+  assembleTransaction
 } from '@stellar/stellar-sdk';
 
 const CONTRACT_ID = "CDQOBACPTRVMNOJMD2NFNNNTZJ4YTQCGFR6N5OKM7643CGBFZ2KGCTLT";
@@ -231,21 +232,7 @@ function App() {
     const minFee = parseInt(simRes.minResourceFee || "0");
     const fee = String(minFee + parseInt(BASE_FEE) + 1000); 
     
-    const rebuiltTx = new TransactionBuilder(account, {
-      fee,
-      networkPassphrase: passphrase,
-    })
-      .addOperation(operation)
-      .setTimeout(180)
-      .setSorobanData(simRes.transactionData)
-      .build();
-
-    if (simRes.results?.[0]?.auth) {
-      const op = rebuiltTx.operations[0];
-      op.auth = simRes.results[0].auth.map(a => 
-        xdr.SorobanAuthorizationEntry.fromXDR(a, 'base64')
-      );
-    }
+    const rebuiltTx = rpc.assembleTransaction(tx, simRes).build();
 
     const rebuiltXdr = rebuiltTx.toEnvelope().toXDR("base64");
     
@@ -406,7 +393,7 @@ function App() {
       setInvoiceAmountUsdc('');
       setInvoiceDescription('');
 
-      fetchInvoices();
+      triggerReloadData();
     } catch (err) {
       console.error("Create Invoice Error:", err);
       setInvoiceLogs(prev => [...prev, { text: `❌ Error: ${err.message || JSON.stringify(err)}`, type: "error" }]);
@@ -494,7 +481,7 @@ function App() {
                   id: Number(invoiceData.id),
                   worker: invoiceData.worker,
                   client: invoiceData.client,
-                  amountUsdc: Number(invoiceData.amount_usdc) / 10000000,
+                  amountUsdc: Number(BigInt(invoiceData.amount_usdc)) / 10000000,
                   description: invoiceData.description,
                   status: resolveStatus(invoiceData.status),
                   createdAt: Number(invoiceData.created_at) * 1000,
