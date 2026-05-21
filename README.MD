@@ -1,5 +1,5 @@
 # Kwagee <img src="3.png" width="36"/>
-### * Kwagee: Owl You Need!*
+###  Kwagee: Owl You Need!
 
 > A Stellar-powered payroll and on-chain budgeting platform built for Filipino freelancers and remote workers — settling international payments in seconds, converting funds transparently, and automatically distributing them across customizable budget wallets for rent, bills, taxes, SSS, and PhilHealth.
 
