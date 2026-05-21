@@ -1,3 +1,4 @@
+import { setFixedBudget, setAllocations, createInvoice, payInvoice, getBuckets } from './services/stellar';
 import React, { useState, useEffect } from 'react';
 import { 
   Wallet, 
@@ -72,6 +73,12 @@ function App() {
   const [transferLogs, setTransferLogs] = useState([]);
   const [showTransferSuccess, setShowTransferSuccess] = useState(false);
   const [lastTxHash, setLastTxHash] = useState('');
+  // Contract integration states
+  const [isDeployingBudget, setIsDeployingBudget] = useState(false);
+  const [contractLogs, setContractLogs] = useState([]);
+  const [contractTxHash, setContractTxHash] = useState('');
+  const [showContractSuccess, setShowContractSuccess] = useState(false);
+  const [buckets, setBuckets] = useState([]);
 
   // Fetch Live Balance from Stellar Horizon Ledger
   useEffect(() => {
@@ -175,6 +182,47 @@ function App() {
 
   // Calculate sum of micro-allocations
   const totalAllocationPct = allocations.gov + allocations.tax + allocations.bills + allocations.spendable;
+
+  // Deploy budget and allocations to real blockchain
+const handleDeployBudget = async () => {
+  if (totalAllocationPct !== 100) {
+    alert("Allocations must equal 100% before deploying!");
+    return;
+  }
+  if (budgetAmount <= 0) {
+    alert("Please set a budget amount first!");
+    return;
+  }
+
+  setIsDeployingBudget(true);
+  setContractLogs([]);
+  setShowContractSuccess(false);
+
+  const log = (msg) => setContractLogs(prev => [...prev, msg]);
+
+  try {
+    log('🚀 Starting blockchain deployment...');
+    const hash1 = await setFixedBudget(budgetAmount, log);
+    log(`✅ Fixed budget set! TX: ${hash1}`);
+
+    await new Promise(r => setTimeout(r, 5000));
+
+    const hash2 = await setAllocations(allocations, log);
+    log(`✅ Allocations set! TX: ${hash2}`);
+
+    log('📦 Fetching updated buckets...');
+    const fetchedBuckets = await getBuckets();
+    setBuckets(fetchedBuckets);
+
+    setContractTxHash(hash2);
+    setShowContractSuccess(true);
+    log('🎉 All done! Budget deployed to Stellar blockchain!');
+  } catch (err) {
+    log(`❌ Error: ${err.message}`);
+  } finally {
+    setIsDeployingBudget(false);
+  }
+};
 
   // Auto-balance Allocations to equal 100%
   const handleAutoBalance = () => {
@@ -903,6 +951,29 @@ function App() {
                     </div>
                   );
                 })}
+
+                {/* Deploy to Blockchain Button */}
+              <button
+                onClick={handleDeployBudget}
+                disabled={isDeployingBudget || totalAllocationPct !== 100}
+                className="btn-primary"
+                style={{ marginTop: '10px' }}
+              >
+                {isDeployingBudget ? <RefreshCw size={16} className="animate-spin" /> : <Zap size={16} />}
+                <span>{isDeployingBudget ? 'Deploying to Blockchain...' : '🚀 Deploy Budget to Blockchain'}</span>
+              </button>
+
+              {/* Contract Logs */}
+              {contractLogs.length > 0 && (
+                <div className="stellar-live-logger" style={{ marginTop: '10px', maxHeight: '200px' }}>
+                  {contractLogs.map((log, i) => (
+                    <div key={i} className="log-entry info">
+                      <ChevronRight size={10} style={{ marginTop: '3px', flexShrink: 0 }} />
+                      <span>{log}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
                 {/* Validation Indicator */}
                 {totalAllocationPct !== 100 ? (
