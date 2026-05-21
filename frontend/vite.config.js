@@ -7,6 +7,7 @@ export default defineConfig({
     react(),
     nodePolyfills(),
   ],
+  base: '/ad-astra-deploy/',
   define: {
     global: 'globalThis',
   },
