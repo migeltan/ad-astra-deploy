@@ -464,7 +464,91 @@ function App() {
     }
   };
 
-  // Pay invoice — two-step: approve USDC allowance, then pay
+  // Send a native XLM payment via Horizon (not Soroban RPC — no simulation needed)
+  const sendNativeXlmPayment = async (destinationAddress, amountXlm, setLogs) => {
+    const cleanAddress = walletAddress.trim();
+    if (!cleanAddress) throw new Error("Wallet not connected");
+
+    let activeNetwork = network;
+    try {
+      const netRes = await getNetwork();
+      if (netRes && !netRes.error && netRes.network) {
+        const netLower = netRes.network.toLowerCase();
+        activeNetwork = (netLower === 'public' || netLower === 'mainnet') ? 'mainnet' : 'testnet';
+      }
+    } catch (e) {}
+
+    const passphrase = activeNetwork === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
+    const horizonBase = activeNetwork === 'mainnet'
+      ? 'https://horizon.stellar.org'
+      : 'https://horizon-testnet.stellar.org';
+
+    setLogs(prev => [...prev, {
+      text: `💸 Sending ${amountXlm} XLM to worker ${destinationAddress.slice(0,6)}...${destinationAddress.slice(-6)}`,
+      type: "info"
+    }]);
+
+    // Fetch current sequence number
+    const accRes = await fetch(`${horizonBase}/accounts/${cleanAddress}`);
+    if (!accRes.ok) throw new Error("Could not load account for XLM payment.");
+    const accData = await accRes.json();
+    const account = new Account(cleanAddress, accData.sequence);
+
+    const tx = new TransactionBuilder(account, {
+      fee: String(Math.max(Number(BASE_FEE), 1000)),
+      networkPassphrase: passphrase,
+    })
+      .addOperation(
+        Operation.payment({
+          destination: destinationAddress,
+          asset: Asset.native(),
+          amount: amountXlm.toFixed(7),
+        })
+      )
+      .setTimeout(180)
+      .build();
+
+    const txXdr = tx.toEnvelope().toXDR("base64");
+
+    setLogs(prev => [...prev, { text: "🖊️ Signing XLM payment via Freighter...", type: "stellar" }]);
+
+    let signedXdr;
+    const signRes = await signTransaction(txXdr, { networkPassphrase: passphrase });
+    if (typeof signRes === 'string') {
+      signedXdr = signRes;
+    } else if (signRes?.signedTxXdr) {
+      signedXdr = signRes.signedTxXdr;
+    } else if (signRes?.error) {
+      throw new Error(`Signing failed: ${signRes.error.message || JSON.stringify(signRes.error)}`);
+    } else {
+      throw new Error("Unexpected Freighter response. Did you reject the transaction?");
+    }
+
+    setLogs(prev => [...prev, { text: "🚀 Submitting XLM payment to Stellar network...", type: "stellar" }]);
+
+    const submitRes = await fetch(`${horizonBase}/transactions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `tx=${encodeURIComponent(signedXdr)}`,
+    });
+    const submitData = await submitRes.json();
+
+    if (!submitRes.ok || submitData.status === 'ERROR') {
+      const detail = submitData.extras?.result_codes
+        ? JSON.stringify(submitData.extras.result_codes)
+        : (submitData.detail || submitData.title || JSON.stringify(submitData));
+      throw new Error(`XLM payment failed: ${detail}`);
+    }
+
+    setLogs(prev => [...prev, {
+      text: `✅ XLM payment confirmed! Hash: ${submitData.hash?.slice(0,10)}...`,
+      type: "success"
+    }]);
+
+    return submitData.hash;
+  };
+
+  // Pay invoice — sends real XLM to the worker, then marks invoice as paid on-chain
   const handlePayInvoice = async (invoiceId) => {
     if (isSandboxMode) return;
     if (!invoiceId) return;
@@ -473,11 +557,7 @@ function App() {
     setPayInvoiceLogs([]);
 
     try {
-      // USDC SAC addresses (Stellar Asset Contract for USDC)
-      const USDC_SAC_TESTNET = 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
-      const USDC_SAC_MAINNET = 'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7EJJUD';
-
-      // Resolve active network from Freighter first, then build everything from that
+      // Resolve active network
       let activeNetwork = network;
       try {
         const netRes = await getNetwork();
@@ -486,56 +566,23 @@ function App() {
           activeNetwork = (netLower === 'public' || netLower === 'mainnet') ? 'mainnet' : 'testnet';
           if (activeNetwork !== network) setNetwork(activeNetwork);
         }
-      } catch (e) {
-        console.warn("Could not retrieve Freighter network for payment:", e);
-      }
+      } catch (e) {}
 
-      const fallbackUsdcSacId = activeNetwork === 'mainnet' ? USDC_SAC_MAINNET : USDC_SAC_TESTNET;
       const rpcUrl = activeNetwork === 'mainnet'
         ? 'https://soroban-rpc.stellar.org'
         : 'https://soroban-testnet.stellar.org';
       const passphrase = activeNetwork === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
       const rpcServer = new rpc.Server(rpcUrl);
+      const cleanAddress = walletAddress.trim();
 
       setPayInvoiceLogs([{
-        text: `🔍 Resolving invoice #${invoiceId} on ${activeNetwork.toUpperCase()}...`,
+        text: `🔍 Fetching invoice #${invoiceId} details from chain...`,
         type: "info"
       }]);
 
-      // Step 0: Fetch the invoice amount FRESH from chain to avoid float precision loss
-      const cleanAddress = walletAddress.trim();
+      // Step 0: Fetch invoice details to get worker address and amount
       const dummyAccount = new Account(cleanAddress, "0");
       const contract = new Contract(CONTRACT_ID);
-
-      // Step 0a: Try to get the USDC token address directly from the contract
-      // This ensures the approve() is called on the EXACT same token the contract uses internally
-      let usdcSacId = fallbackUsdcSacId;
-      try {
-        const usdcAddrTx = new TransactionBuilder(dummyAccount, {
-          fee: BASE_FEE,
-          networkPassphrase: passphrase,
-        })
-          .addOperation(contract.call("get_usdc_token"))
-          .setTimeout(180)
-          .build();
-        const usdcAddrSim = await rpcServer.simulateTransaction(usdcAddrTx);
-        if (!usdcAddrSim.error && usdcAddrSim.result?.retval) {
-          const contractUsdcAddr = scValToNative(usdcAddrSim.result.retval);
-          if (contractUsdcAddr && typeof contractUsdcAddr === 'string' && contractUsdcAddr.length > 30) {
-            usdcSacId = contractUsdcAddr;
-            setPayInvoiceLogs(prev => [...prev, {
-              text: `🔗 Contract USDC token resolved: ${usdcSacId.slice(0,8)}...${usdcSacId.slice(-6)}`,
-              type: "stellar"
-            }]);
-          }
-        }
-      } catch (e) {
-        // Contract may not expose get_usdc_token — fall back to known SAC address
-        setPayInvoiceLogs(prev => [...prev, {
-          text: `ℹ️ Using default USDC SAC: ${usdcSacId.slice(0,8)}...${usdcSacId.slice(-6)}`,
-          type: "info"
-        }]);
-      }
 
       const detailTx = new TransactionBuilder(dummyAccount, {
         fee: BASE_FEE,
@@ -549,47 +596,37 @@ function App() {
 
       const detailSim = await rpcServer.simulateTransaction(detailTx);
       if (detailSim.error || !detailSim.result?.retval) {
-        throw new Error(`Could not fetch invoice #${invoiceId} from chain: ${detailSim.error || 'no return value'}`);
+        throw new Error(`Could not fetch invoice #${invoiceId}: ${detailSim.error || 'no return value'}`);
       }
 
       const invoiceData = scValToNative(detailSim.result.retval);
-      // amount_usdc is stored as i128 in stroops (7 decimals), read it as BigInt directly
       const amountRaw = BigInt(invoiceData.amount_usdc);
-      const amountDisplay = Number(amountRaw) / 10_000_000;
+      const amountXlm = Number(amountRaw) / 10_000_000; // treat stored amount as XLM units
+      const workerAddress = invoiceData.worker;
+
+      if (!workerAddress || workerAddress.length < 30) {
+        throw new Error("Could not resolve worker address from invoice.");
+      }
 
       setPayInvoiceLogs(prev => [...prev, {
-        text: `📋 Invoice found: ${amountDisplay} USDC — verifying USDC SAC: ${usdcSacId.slice(0,8)}...`,
+        text: `📋 Invoice #${invoiceId}: ${amountXlm} XLM → worker ${workerAddress.slice(0,6)}...${workerAddress.slice(-6)}`,
         type: "stellar"
       }]);
 
-      // Step 1: approve Kwagee contract to spend USDC on behalf of client
+      // Step 1: Send native XLM directly to the worker via Horizon
       setPayInvoiceLogs(prev => [...prev, {
-        text: `🔐 Step 1/2: Approving USDC allowance of ${amountDisplay} USDC for contract to pull...`,
+        text: `💸 Step 1/2: Sending ${amountXlm} XLM to worker...`,
         type: "info"
       }]);
 
-      const latestLedger = await rpcServer.getLatestLedger();
-      const expirationLedger = latestLedger.sequence + 500; // ~1 hour, tight window to avoid stale approvals
+      await sendNativeXlmPayment(workerAddress, amountXlm, setPayInvoiceLogs);
 
-      const usdcContract = new Contract(usdcSacId);
-      const approveOp = usdcContract.call(
-        "approve",
-        new Address(walletAddress).toScVal(),
-        new Address(CONTRACT_ID).toScVal(),
-        nativeToScVal(amountRaw, { type: "i128" }),
-        nativeToScVal(expirationLedger, { type: "u32" })
-      );
-
-      await sendTransactionWithFreighter(approveOp, setPayInvoiceLogs);
-
+      // Step 2: Mark the invoice as paid on the Soroban contract
       setPayInvoiceLogs(prev => [...prev, {
-        text: `✅ Allowance approved on USDC SAC! Step 2/2: Calling pay_invoice #${invoiceId}...`,
-        type: "success"
+        text: `📝 Step 2/2: Recording payment on smart contract...`,
+        type: "info"
       }]);
 
-      // Step 2: call pay_invoice on Kwagee contract
-      // The contract must call transfer_from(client, worker, amount) on the SAME usdcSacId above.
-      // If USDC is not being deducted after this step, verify your contract's hardcoded USDC address matches: ${usdcSacId}
       const kwageeContract = new Contract(CONTRACT_ID);
       const payOp = kwageeContract.call(
         "pay_invoice",
@@ -600,11 +637,26 @@ function App() {
       await sendTransactionWithFreighter(payOp, setPayInvoiceLogs);
 
       setPayInvoiceLogs(prev => [...prev, {
-        text: `🎉 Invoice #${invoiceId} paid successfully! ${amountDisplay} USDC transferred.`,
+        text: `🎉 Invoice #${invoiceId} paid! ${amountXlm} XLM deducted from your wallet.`,
         type: "success"
       }]);
 
+      // Optimistically deduct XLM from displayed balance immediately
+      setBalances(prev => ({
+        ...prev,
+        xlm: Math.max(0, prev.xlm - amountXlm),
+        php: (prev.usdc > 0 ? prev.usdc * 57 : Math.max(0, prev.xlm - amountXlm) * 0.11 * 57)
+      }));
+
+      setPayInvoiceLogs(prev => [...prev, {
+        text: `💳 Wallet balance updated: -${amountXlm} XLM deducted.`,
+        type: "stellar"
+      }]);
+
       setInvoiceIdToPay('');
+
+      // Re-fetch after delay to reconcile with Horizon's confirmed state
+      setTimeout(() => triggerReloadData(), 4000);
       triggerReloadData();
     } catch (err) {
       console.error("Pay Invoice Error:", err);
