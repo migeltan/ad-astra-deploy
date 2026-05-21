@@ -50,7 +50,7 @@ import {
   assembleTransaction
 } from '@stellar/stellar-sdk';
 
-const CONTRACT_ID = "CDQOBACPTRVMNOJMD2NFNNNTZJ4YTQCGFR6N5OKM7643CGBFZ2KGCTLT";
+const CONTRACT_ID = "CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO";
 
 function App() {
   // Wallet Address State
@@ -141,6 +141,7 @@ function App() {
   const [isPayingInvoice, setIsPayingInvoice] = useState(false);
   const [payInvoiceLogs, setPayInvoiceLogs] = useState([]);
   const [workerInvoices, setWorkerInvoices] = useState([]);
+  const [clientInvoices, setClientInvoices] = useState([]);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
 
   // Withdraw Bucket States
@@ -510,6 +511,84 @@ function App() {
     }
   };
 
+  const fetchClientInvoices = async () => {
+    const cleanAddress = walletAddress.trim();
+    if (!cleanAddress || cleanAddress.length < 30 || isSandboxMode) return;
+
+    setIsLoadingInvoices(true);
+
+    const rpcUrl = network === 'mainnet'
+      ? 'https://soroban-rpc.stellar.org'
+      : 'https://soroban-testnet.stellar.org';
+    const server = new rpc.Server(rpcUrl);
+    const contract = new Contract(CONTRACT_ID);
+    const passphrase = network === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
+
+    try {
+      const dummyAccount = new Account(cleanAddress, "0");
+
+      const tx = new TransactionBuilder(dummyAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: passphrase,
+      })
+        .addOperation(
+          contract.call("get_client_invoices", new Address(cleanAddress).toScVal())
+        )
+        .setTimeout(180)
+        .build();
+
+      const simRes = await server.simulateTransaction(tx);
+      if (!simRes.error && simRes.result?.retval) {
+        const invoiceIds = scValToNative(simRes.result.retval);
+        if (Array.isArray(invoiceIds) && invoiceIds.length > 0) {
+          const detailsPromises = invoiceIds.map(async (id) => {
+            try {
+              const detailTx = new TransactionBuilder(dummyAccount, {
+                fee: BASE_FEE,
+                networkPassphrase: passphrase,
+              })
+                .addOperation(
+                  contract.call("get_invoice", nativeToScVal(BigInt(id), { type: "u64" }))
+                )
+                .setTimeout(180)
+                .build();
+
+              const detailSim = await server.simulateTransaction(detailTx);
+              if (!detailSim.error && detailSim.result?.retval) {
+                const invoiceData = scValToNative(detailSim.result.retval);
+                return {
+                  id: Number(invoiceData.id),
+                  worker: invoiceData.worker,
+                  client: invoiceData.client,
+                  amountUsdc: Number(BigInt(invoiceData.amount_usdc)) / 10000000,
+                  description: invoiceData.description,
+                  status: resolveStatus(invoiceData.status),
+                  createdAt: Number(invoiceData.created_at) * 1000,
+                  paidAt: Number(invoiceData.paid_at) * 1000
+                };
+              }
+            } catch (e) {
+              console.error(`Error fetching client invoice details for ${id}:`, e);
+            }
+            return null;
+          });
+
+          const resolvedInvoices = await Promise.all(detailsPromises);
+          setClientInvoices(resolvedInvoices.filter(i => i !== null).sort((a, b) => b.id - a.id));
+        } else {
+          setClientInvoices([]);
+        }
+      } else {
+        setClientInvoices([]);
+      }
+    } catch (err) {
+      console.error("Error fetching client invoices:", err);
+      setClientInvoices([]);
+    } finally {
+      setIsLoadingInvoices(false);
+    }
+  };
+
   // Fetch Live Balance from Stellar Horizon Ledger
   useEffect(() => {
     const fetchBalance = async () => {
@@ -713,6 +792,7 @@ function App() {
   // Fetch smart invoices list
   useEffect(() => {
     fetchInvoices();
+    fetchClientInvoices();
   }, [walletAddress, network, isSandboxMode, reloadCounter]);
 
   // Clamp budgetAmount in sandbox mode when balances.usdc changes
@@ -2715,6 +2795,110 @@ function App() {
                   <div style={{ fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '10px' }}>
                     On-Chain Invoices Feed
                   </div>
+
+
+                {/* Client Invoices Feed */}
+<div>
+  <div style={{ fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '10px' }}>
+    Invoices Assigned to You
+  </div>
+
+  {clientInvoices.length === 0 ? (
+    <div style={{
+      padding: '24px 12px',
+      textAlign: 'center',
+      background: 'rgba(255,255,255,0.01)',
+      borderRadius: '12px',
+      border: '1px dashed var(--border-light)',
+      color: 'var(--text-dim)',
+      fontSize: '12px'
+    }}>
+      No invoices assigned to you.
+    </div>
+  ) : (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '250px', overflowY: 'auto', paddingRight: '4px' }}>
+      {clientInvoices.map((inv) => {
+        const status = inv.status;
+        const displayStatus = (status === 'Unpaid' || status === '0' || status === 0) ? 'Unpaid' : 'Paid';
+        const isUnpaid = displayStatus === 'Unpaid';
+
+        return (
+          <div key={inv.id} style={{
+            background: 'rgba(255, 255, 255, 0.02)',
+            border: '1px solid rgba(255, 255, 255, 0.04)',
+            borderLeft: `4px solid ${isUnpaid ? 'var(--warning-color)' : 'var(--success-color)'}`,
+            borderRadius: '12px',
+            padding: '12px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span style={{ fontSize: '11px', fontWeight: 800, color: '#fff' }}>
+                  INVOICE #{inv.id}
+                </span>
+                <span style={{
+                  marginLeft: '8px',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  fontSize: '9px',
+                  fontWeight: 800,
+                  background: isUnpaid ? 'rgba(255, 159, 28, 0.15)' : 'rgba(0, 245, 212, 0.15)',
+                  color: isUnpaid ? 'var(--warning-color)' : 'var(--success-color)'
+                }}>
+                  {displayStatus}
+                </span>
+              </div>
+              <span style={{ fontSize: '14px', fontWeight: 800, color: '#fff' }}>
+                ${inv.amountUsdc.toLocaleString()} USDC
+              </span>
+            </div>
+
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+              {inv.description}
+            </div>
+
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              fontSize: '10px',
+              color: 'var(--text-dim)',
+              borderTop: '1px solid rgba(255,255,255,0.03)',
+              paddingTop: '6px'
+            }}>
+              <span>Worker: {inv.worker.slice(0,6)}...{inv.worker.slice(-6)}</span>
+              {isUnpaid && (
+                <button
+                  onClick={() => handlePayInvoice(inv.id)}
+                  disabled={isPayingInvoice}
+                  style={{
+                    background: 'var(--success-color)',
+                    border: 'none',
+                    color: '#06040d',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    fontSize: '9px',
+                    fontFamily: 'var(--font-outfit)'
+                  }}
+                >
+                  Pay Now
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  )}
+</div>  
+                
+                  
+
+
 
                   {workerInvoices.length === 0 ? (
                     <div style={{
