@@ -165,6 +165,7 @@ function App() {
   const [newInvDesc, setNewInvDesc] = useState('');
   const [newInvClient, setNewInvClient] = useState('');
   const [newInvAmount, setNewInvAmount] = useState(500);
+  const [newInvRecipient, setNewInvRecipient] = useState('');
 
   // Stellar Transaction Sandbox Simulator Logger State
   const [isSimulatingTx, setIsSimulatingTx] = useState(false);
@@ -174,6 +175,7 @@ function App() {
   // Cascade overlay state
   const [showCascadeOverlay, setShowCascadeOverlay] = useState(false);
   const [cascadePayout, setCascadePayout] = useState({ usd: 0, xlm: 0 });
+  const [cascadeRecipient, setCascadeRecipient] = useState('');
   const [cascadeAnimateWidths, setCascadeAnimateWidths] = useState({
     savings: 0, gov: 0, tax: 0, bills: 0, spendable: 0
   });
@@ -206,6 +208,9 @@ function App() {
     e.preventDefault();
     if (!newInvDesc || !newInvClient || newInvAmount <= 0) return;
     
+    const finalRecipient = newInvRecipient.trim() || walletAddress;
+    const isOutgoing = finalRecipient !== walletAddress;
+    
     const newInvoice = {
       id: `INV-00${invoices.length + 1}`,
       description: newInvDesc,
@@ -213,7 +218,8 @@ function App() {
       amountUsd: Number(newInvAmount),
       amountXlm: Number(newInvAmount * 4), // Mock exchange rate: 1 USD = 4 XLM
       status: 'pending',
-      recipient: walletAddress, // Dynamically maps to currently connected account!
+      recipient: finalRecipient, // Dynamically maps to inputted address!
+      isOutgoing,
       date: new Date().toISOString().split('T')[0]
     };
 
@@ -221,6 +227,7 @@ function App() {
     setNewInvDesc('');
     setNewInvClient('');
     setNewInvAmount(500);
+    setNewInvRecipient('');
     setActiveTab('client'); // Switch to Client Hub so they can try paying it
   };
 
@@ -231,24 +238,33 @@ function App() {
     setCurrentPayingInvoice(invoice.id);
     setSimLogs([]);
     
+    const isOutgoing = invoice.recipient !== walletAddress;
+
     const logs = [
       { text: '⏳ Initiating Stellar Freighter Wallet request...', type: 'info' },
       { text: `🔑 Connection detected for: ${walletAddress.slice(0, 6)}...${walletAddress.slice(-6)}`, type: 'stellar' },
       { text: '🛰️ Fetching destination Horizon trustlines for USDC/XLM...', type: 'info' },
       { text: '📜 Constructing Stellar transaction sequence object...', type: 'info' },
-      { text: `💸 Adding payment operation: ${invoice.amountUsd} USDC (${invoice.amountXlm} XLM) to Kwagee split ledger...`, type: 'info' },
+      { text: isOutgoing 
+          ? `💸 Adding payment operation: Sending ${invoice.amountUsd} USDC (${invoice.amountXlm} XLM) from your wallet to recipient ${invoice.recipient.slice(0, 6)}...${invoice.recipient.slice(-6)}`
+          : `💸 Adding payment operation: Receiving ${invoice.amountUsd} USDC (${invoice.amountXlm} XLM) from client to Kwagee split ledger...`, 
+        type: 'info' },
       { text: '🖊️ Requesting cryptographic signature via Freighter...', type: 'stellar' },
       { text: '🚀 Submitting transaction payload to Stellar Testnet Horizon server...', type: 'stellar' },
       { text: '📡 Horizon: Processing ledger state update... (takes 3-5 seconds)', type: 'info' },
       { text: '🎉 LEDGER CONFIRMED! Sequence verified.', type: 'success' },
       { text: `🔗 TX Hash: ${Math.random().toString(16).substring(2, 10)}8f4b00de${Math.random().toString(16).substring(2, 10)}e`, type: 'success' },
-      { text: `💰 Kwagee preprogrammed allocation handler triggered successfully!`, type: 'success' }
+      { text: isOutgoing 
+          ? `💰 Debit transaction processed successfully! XLM sent.`
+          : `💰 Kwagee preprogrammed allocation handler triggered successfully!`, 
+        type: 'success' }
     ];
 
     let currentLogIndex = 0;
     const interval = setInterval(() => {
       if (currentLogIndex < logs.length) {
-        setSimLogs(prev => [...prev, logs[currentLogIndex]]);
+        const nextLog = logs[currentLogIndex];
+        setSimLogs(prev => [...prev, nextLog]);
         currentLogIndex++;
       } else {
         clearInterval(interval);
@@ -262,26 +278,40 @@ function App() {
         const payoutUsd = invoice.amountUsd;
         const payoutXlm = invoice.amountXlm;
         
-        setBalances(prev => ({
-          xlm: prev.xlm + payoutXlm,
-          usdc: prev.usdc + payoutUsd,
-          php: prev.php + (payoutUsd * 57)
-        }));
+        if (isOutgoing) {
+          setBalances(prev => ({
+            xlm: Math.max(0, prev.xlm - payoutXlm),
+            usdc: Math.max(0, prev.usdc - payoutUsd),
+            php: Math.max(0, prev.php - (payoutUsd * 57))
+          }));
+          
+          setCascadePayout({ usd: -payoutUsd, xlm: -payoutXlm });
+          setCascadeRecipient(invoice.recipient);
+        } else {
+          setBalances(prev => ({
+            xlm: prev.xlm + payoutXlm,
+            usdc: prev.usdc + payoutUsd,
+            php: prev.php + (payoutUsd * 57)
+          }));
+          
+          setCascadePayout({ usd: payoutUsd, xlm: payoutXlm });
+          setCascadeRecipient('');
+        }
 
-        // Display Allocation cascade banner
-        setCascadePayout({ usd: payoutUsd, xlm: payoutXlm });
         setShowCascadeOverlay(true);
         
-        // Animate mini bars in overlay after rendering
-        setTimeout(() => {
-          setCascadeAnimateWidths({
-            savings: allocations.savings,
-            gov: allocations.gov,
-            tax: allocations.tax,
-            bills: allocations.bills,
-            spendable: allocations.spendable
-          });
-        }, 100);
+        // Animate mini bars in overlay after rendering (only for incoming payroll splits!)
+        if (!isOutgoing) {
+          setTimeout(() => {
+            setCascadeAnimateWidths({
+              savings: allocations.savings,
+              gov: allocations.gov,
+              tax: allocations.tax,
+              bills: allocations.bills,
+              spendable: allocations.spendable
+            });
+          }, 100);
+        }
       }
     }, 450);
   };
@@ -553,7 +583,7 @@ function App() {
             <div className="balance-card">
               <div className="balance-label">
                 <Coins size={12} className="text-success-color" />
-                <span>Simulated Wallet Balance</span>
+                <span>{walletAddress === 'GBDEMOWORKERREMOTEPAID2026KWAGEESANDBOX4736KUX' ? 'Simulated Wallet Balance' : 'Live Ledger Balance'}</span>
               </div>
               <div className="balance-val">${balances.usdc.toLocaleString()} USDC</div>
               <div className="balance-sub">{balances.xlm.toLocaleString()} XLM (Est.)</div>
@@ -854,10 +884,22 @@ function App() {
                     required
                   />
                 </div>
+
+                <div className="form-group">
+                  <label>Recipient Stellar Address (Worker/Subcontractor)</label>
+                  <input 
+                    type="text" 
+                    value={newInvRecipient}
+                    onChange={(e) => setNewInvRecipient(e.target.value)}
+                    placeholder={walletAddress ? `Leave blank to pay your connected wallet (${walletAddress.slice(0, 6)}...${walletAddress.slice(-6)})` : "Paste worker's G... public key"}
+                    className="form-input"
+                    style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                  />
+                </div>
                 
                 <div className="input-row">
                   <div className="form-group">
-                    <label>Client Name</label>
+                    <label>Client Name / Payer</label>
                     <input 
                       type="text" 
                       value={newInvClient}
@@ -892,15 +934,32 @@ function App() {
               <div className="client-sandbox">
                 <div className="sandbox-header">
                   <Coins size={14} />
-                  <span>Your Invoices ledger ({invoices.filter(i => i.recipient === walletAddress).length})</span>
+                  <span>Your Invoices ledger ({invoices.filter(i => i.recipient === walletAddress || i.isOutgoing).length})</span>
                 </div>
 
-                {invoices.filter(i => i.recipient === walletAddress).map((invoice) => (
-                  <div key={invoice.id} className={`invoice-item ${invoice.status}`}>
+                {invoices.filter(i => i.recipient === walletAddress || i.isOutgoing).map((invoice) => (
+                  <div key={invoice.id} className={`invoice-item ${invoice.status}`} style={{
+                    borderLeftColor: invoice.isOutgoing ? 'var(--primary-glow)' : (invoice.status === 'paid' ? 'var(--success-color)' : 'var(--warning-color)')
+                  }}>
                     <div className="invoice-main-info">
                       <div>
-                        <div className="invoice-desc">{invoice.description}</div>
-                        <div className="invoice-client">Client: {invoice.client} — {invoice.date}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <div className="invoice-desc">{invoice.description}</div>
+                          <span style={{
+                            fontSize: '9px',
+                            fontWeight: 800,
+                            textTransform: 'uppercase',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            background: invoice.isOutgoing ? 'rgba(157, 78, 221, 0.15)' : 'rgba(0, 245, 212, 0.15)',
+                            color: invoice.isOutgoing ? 'var(--purple-accent)' : 'var(--success-color)'
+                          }}>
+                            {invoice.isOutgoing ? 'Outgoing (Debit)' : 'Incoming (Payroll)'}
+                          </span>
+                        </div>
+                        <div className="invoice-client">
+                          {invoice.isOutgoing ? `To Recipient: ${invoice.recipient.slice(0, 8)}...${invoice.recipient.slice(-8)}` : `Client: ${invoice.client}`} — {invoice.date}
+                        </div>
                       </div>
                       <div className="invoice-pricing">
                         <div className="invoice-amount-usd">${invoice.amountUsd} USD</div>
@@ -910,7 +969,7 @@ function App() {
 
                     <div className="invoice-action-bar">
                       <span className={`invoice-status-badge ${invoice.status}`}>
-                        {invoice.status === 'paid' ? 'Paid' : 'Pending Client payment'}
+                        {invoice.status === 'paid' ? 'Paid' : 'Pending Payment'}
                       </span>
                       
                       {invoice.status === 'pending' && (
@@ -920,8 +979,12 @@ function App() {
                             handleSimulatePayment(invoice);
                           }}
                           className="btn-pay-simulate"
+                          style={{
+                            background: invoice.isOutgoing ? 'linear-gradient(135deg, var(--purple-dim), var(--primary-glow))' : '',
+                            color: invoice.isOutgoing ? '#fff' : ''
+                          }}
                         >
-                          Simulate client payment
+                          {invoice.isOutgoing ? 'Simulate sending XLM' : 'Simulate client payment'}
                         </button>
                       )}
                     </div>
@@ -942,7 +1005,7 @@ function App() {
               </p>
 
               <div className="client-sandbox" style={{ border: 'none', paddingTop: 0, marginTop: 0 }}>
-                {invoices.filter(i => i.recipient === walletAddress && i.status === 'pending').length === 0 ? (
+                {invoices.filter(i => (i.recipient === walletAddress || i.isOutgoing) && i.status === 'pending').length === 0 ? (
                   <div style={{
                     padding: '30px 20px',
                     textAlign: 'center',
@@ -956,12 +1019,32 @@ function App() {
                     <p style={{ fontSize: '11px' }}>Create a new invoice in the Freelancer tab to simulate another payment cycle.</p>
                   </div>
                 ) : (
-                  invoices.filter(i => i.recipient === walletAddress && i.status === 'pending').map((invoice) => (
-                    <div key={invoice.id} className="invoice-item pending">
+                  invoices.filter(i => (i.recipient === walletAddress || i.isOutgoing) && i.status === 'pending').map((invoice) => (
+                    <div key={invoice.id} className="invoice-item pending" style={{
+                      borderLeftColor: invoice.isOutgoing ? 'var(--primary-glow)' : 'var(--warning-color)'
+                    }}>
                       <div className="invoice-main-info">
                         <div>
-                          <div className="invoice-desc">{invoice.description}</div>
-                          <div className="invoice-client">Invoice Reference ID: {invoice.id}</div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <div className="invoice-desc">{invoice.description}</div>
+                            <span style={{
+                              fontSize: '9px',
+                              fontWeight: 800,
+                              textTransform: 'uppercase',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              background: invoice.isOutgoing ? 'rgba(157, 78, 221, 0.15)' : 'rgba(255, 159, 28, 0.15)',
+                              color: invoice.isOutgoing ? 'var(--purple-accent)' : 'var(--warning-color)'
+                            }}>
+                              {invoice.isOutgoing ? 'Outgoing Payment (Debit)' : 'Incoming Invoice (Credit)'}
+                            </span>
+                          </div>
+                          <div className="invoice-client">
+                            {invoice.isOutgoing 
+                              ? `To Subcontractor Recipient: ${invoice.recipient.slice(0, 8)}...${invoice.recipient.slice(-8)}`
+                              : `Invoice Reference ID: ${invoice.id}`
+                            }
+                          </div>
                         </div>
                         <div className="invoice-pricing">
                           <div className="invoice-amount-usd">${invoice.amountUsd} USD</div>
@@ -971,15 +1054,22 @@ function App() {
 
                       <div className="invoice-action-bar">
                         <span className="invoice-status-badge pending">
-                          Awaiting Payment Action
+                          {invoice.isOutgoing ? 'Awaiting Your Transfer Signature' : 'Awaiting Client Payment Action'}
                         </span>
                         
                         <button 
                           disabled={isSimulatingTx}
                           onClick={() => handleSimulatePayment(invoice)}
                           className="btn-pay-simulate"
+                          style={{
+                            background: invoice.isOutgoing ? 'linear-gradient(135deg, var(--purple-dim), var(--primary-glow))' : '',
+                            color: invoice.isOutgoing ? '#fff' : ''
+                          }}
                         >
-                          {currentPayingInvoice === invoice.id ? 'Processing...' : 'Pay with Freighter'}
+                          {currentPayingInvoice === invoice.id 
+                            ? 'Processing...' 
+                            : (invoice.isOutgoing ? 'Simulate sending XLM' : 'Simulate client payment')
+                          }
                         </button>
                       </div>
                     </div>
@@ -1047,46 +1137,97 @@ function App() {
       {/* INTERACTIVE CASCADING ALLOCATION TRIGGER OVERLAY BANNER */}
       {showCascadeOverlay && (
         <div className="cascade-alert-overlay">
-          <div className="cascade-title">
-            <Sparkles size={18} />
-            <span>Kwagee Autopay Cascade Settled!</span>
-          </div>
-          
-          <div className="cascade-sub-text">
-            Received <strong>${cascadePayout.usd} USDC</strong> ({cascadePayout.xlm} XLM). 
-            Allocations automatically filtered down the chain:
-          </div>
+          {cascadePayout.usd < 0 ? (
+            /* Outgoing payment success overlay */
+            <>
+              <div className="cascade-title" style={{ borderColor: 'rgba(157, 78, 221, 0.3)' }}>
+                <ArrowUpRight size={18} style={{ color: 'var(--purple-accent)' }} />
+                <span>Stellar Outgoing Transfer Settled!</span>
+              </div>
+              
+              <div className="cascade-sub-text" style={{ marginBottom: '24px' }}>
+                You have successfully sent <strong>${Math.abs(cascadePayout.usd)} USDC</strong> ({Math.abs(cascadePayout.xlm)} XLM) from your wallet.
+              </div>
 
-          <div className="cascade-allocation-bar-stack">
-            {Object.keys(allocations).map((key) => {
-              const config = allocationConfig[key];
-              const pct = allocations[key];
-              const cutUsd = (cascadePayout.usd * pct) / 100;
-              const cutPhp = cutUsd * 57;
-              return (
-                <div key={key}>
-                  <div className="cascade-mini-bar">
-                    <span style={{ color: config.color, fontWeight: 700 }}>
-                      {key.toUpperCase()} ({pct}%)
-                    </span>
-                    <span style={{ color: '#fff', fontWeight: 600 }}>
-                      ${cutUsd.toFixed(1)} USDC / ₱{cutPhp.toLocaleString(undefined, {maximumFractionDigits: 0})} PHP
-                    </span>
-                  </div>
-                  <div className="cascade-bar-progress-container">
-                    <div 
-                      className="cascade-bar-fill" 
-                      style={{ 
-                        backgroundColor: config.color,
-                        width: `${cascadeAnimateWidths[key]}%`,
-                        boxShadow: `0 0 8px ${config.color}`
-                      }}
-                    ></div>
-                  </div>
+              <div style={{
+                background: 'rgba(10, 6, 22, 0.5)',
+                border: '1px solid rgba(157, 78, 221, 0.25)',
+                borderRadius: '16px',
+                padding: '20px',
+                marginBottom: '24px',
+                textAlign: 'left'
+              }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 700, marginBottom: '6px' }}>
+                  Recipient Stellar Address
                 </div>
-              );
-            })}
-          </div>
+                <div style={{ 
+                  fontFamily: 'monospace', 
+                  fontSize: '13px', 
+                  color: '#fff', 
+                  wordBreak: 'break-all',
+                  background: 'rgba(255,255,255,0.03)',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-light)'
+                }}>
+                  {cascadeRecipient}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px', fontSize: '12px' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Status:</span>
+                  <span style={{ color: 'var(--success-color)', fontWeight: 700 }}>Success (Ledger Confirmed)</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontSize: '12px' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Protocol:</span>
+                  <span style={{ color: 'var(--purple-light)', fontWeight: 600 }}>Stellar Testnet Rails</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            /* Incoming payroll success overlay */
+            <>
+              <div className="cascade-title">
+                <Sparkles size={18} />
+                <span>Kwagee Autopay Cascade Settled!</span>
+              </div>
+              
+              <div className="cascade-sub-text">
+                Received <strong>${cascadePayout.usd} USDC</strong> ({cascadePayout.xlm} XLM). 
+                Allocations automatically filtered down the chain:
+              </div>
+
+              <div className="cascade-allocation-bar-stack">
+                {Object.keys(allocations).map((key) => {
+                  const config = allocationConfig[key];
+                  const pct = allocations[key];
+                  const cutUsd = (cascadePayout.usd * pct) / 100;
+                  const cutPhp = cutUsd * 57;
+                  return (
+                    <div key={key}>
+                      <div className="cascade-mini-bar">
+                        <span style={{ color: config.color, fontWeight: 700 }}>
+                          {key.toUpperCase()} ({pct}%)
+                        </span>
+                        <span style={{ color: '#fff', fontWeight: 600 }}>
+                          ${cutUsd.toFixed(1)} USDC / ₱{cutPhp.toLocaleString(undefined, {maximumFractionDigits: 0})} PHP
+                        </span>
+                      </div>
+                      <div className="cascade-bar-progress-container">
+                        <div 
+                          className="cascade-bar-fill" 
+                          style={{ 
+                            backgroundColor: config.color,
+                            width: `${cascadeAnimateWidths[key]}%`,
+                            boxShadow: `0 0 8px ${config.color}`
+                          }}
+                        ></div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
 
           <button 
             onClick={() => {
@@ -1094,10 +1235,11 @@ function App() {
               setCascadeAnimateWidths({
                 savings: 0, gov: 0, tax: 0, bills: 0, spendable: 0
               });
+              setCascadeRecipient('');
             }}
             className="btn-close-overlay"
           >
-            Acknowledge splits & continue
+            Acknowledge transfer & continue
           </button>
         </div>
       )}
