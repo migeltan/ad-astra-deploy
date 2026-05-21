@@ -180,7 +180,8 @@ function App() {
     try {
       const netRes = await getNetwork();
       if (netRes && !netRes.error && netRes.network) {
-        activeNetwork = netRes.network.toLowerCase() === 'public' ? 'mainnet' : 'testnet';
+        const netLower = netRes.network.toLowerCase();
+        activeNetwork = (netLower === 'public' || netLower === 'mainnet') ? 'mainnet' : 'testnet';
         if (activeNetwork !== network) {
           setNetwork(activeNetwork);
         }
@@ -228,33 +229,65 @@ function App() {
       throw new Error(`Simulation failed in smart contract: ${JSON.stringify(simRes.result.error)}`);
     }
 
-    setLogs(prev => [...prev, { text: "💰 Rebuilding transaction with simulation resource fees...", type: "info" }]);
-    
-    const minFee = parseInt(simRes.minResourceFee || "0");
-    const fee = String(minFee + parseInt(BASE_FEE) + 1000); 
-    
+    setLogs(prev => [...prev, { text: "💰 Assembling transaction with simulation resource fees...", type: "info" }]);
+
+    // Assemble directly from the SAME tx object used for simulation.
+    // Do NOT rebuild from scratch — that would produce a duplicate sequence number.
     const rebuiltTx = rpc.assembleTransaction(tx, simRes).build();
 
     const rebuiltXdr = rebuiltTx.toEnvelope().toXDR("base64");
     
     setLogs(prev => [...prev, { text: "🖊️ Cryptographically signing transaction via Freighter...", type: "stellar" }]);
     
-    const signRes = await signTransaction(rebuiltXdr, {
-      networkPassphrase: passphrase
-    });
-
-    if (signRes.error) {
-      throw new Error(`Signing failed: ${signRes.error.message || JSON.stringify(signRes.error)}`);
+    let signedTxXdr;
+    try {
+      const signRes = await signTransaction(rebuiltXdr, {
+        networkPassphrase: passphrase
+      });
+      // Freighter API v2+ returns the signed XDR string directly;
+      // older versions returned { signedTxXdr: "..." } — handle both shapes.
+      if (typeof signRes === 'string') {
+        signedTxXdr = signRes;
+      } else if (signRes && typeof signRes === 'object') {
+        if (signRes.error) {
+          throw new Error(`Signing failed: ${signRes.error.message || JSON.stringify(signRes.error)}`);
+        }
+        signedTxXdr = signRes.signedTxXdr || signRes.result || signRes;
+      } else {
+        throw new Error("Unexpected response shape from Freighter signTransaction");
+      }
+      if (!signedTxXdr || typeof signedTxXdr !== 'string') {
+        throw new Error("Freighter returned an empty or invalid signed XDR. Did you reject the transaction?");
+      }
+    } catch (err) {
+      // Re-throw with a clearer message if it's a user rejection
+      const msg = err.message || String(err);
+      if (msg.toLowerCase().includes('user') || msg.toLowerCase().includes('reject') || msg.toLowerCase().includes('cancel')) {
+        throw new Error("Transaction cancelled: User rejected the Freighter signing request.");
+      }
+      throw err;
     }
-    const signedTxXdr = signRes.signedTxXdr;
 
     setLogs(prev => [...prev, { text: "🚀 Submitting signed XDR to Soroban RPC node...", type: "stellar" }]);
-    const submitRes = await server.sendTransaction(
-      TransactionBuilder.fromXDR(signedTxXdr, passphrase)
-    );
 
-    if (submitRes.status === "ERROR") {
-      throw new Error(`Transaction submission failed: ${JSON.stringify(submitRes.errorResultXdr)}`);
+    let submitRes;
+    try {
+      submitRes = await server.sendTransaction(
+        TransactionBuilder.fromXDR(signedTxXdr, passphrase)
+      );
+    } catch (submitErr) {
+      throw new Error(`Failed to submit transaction to RPC: ${submitErr.message || JSON.stringify(submitErr)}`);
+    }
+
+    if (!submitRes) {
+      throw new Error("Transaction submission returned no response from RPC node.");
+    }
+
+    if (submitRes.status === "ERROR" || submitRes.status === "FAILED") {
+      const errDetail = submitRes.errorResultXdr
+        ? ` XDR: ${submitRes.errorResultXdr}`
+        : (submitRes.errorResult ? ` ${JSON.stringify(submitRes.errorResult)}` : '');
+      throw new Error(`Transaction submission failed on RPC (status: ${submitRes.status}).${errDetail}`);
     }
 
     const txHash = submitRes.hash;
@@ -403,7 +436,7 @@ function App() {
     }
   };
 
-  // Pay invoice
+  // Pay invoice — two-step: approve USDC allowance, then pay
   const handlePayInvoice = async (invoiceId) => {
     if (isSandboxMode) return;
     if (!invoiceId) return;
@@ -412,17 +445,63 @@ function App() {
     setPayInvoiceLogs([]);
 
     try {
-      const contract = new Contract(CONTRACT_ID);
-      const op = contract.call(
+      // Step 0: find invoice details for the amount
+      const invoiceDetails = [...clientInvoices, ...workerInvoices].find(
+        inv => String(inv.id) === String(invoiceId)
+      );
+
+      if (!invoiceDetails) {
+        throw new Error(`Invoice #${invoiceId} not found locally. Please refresh the invoice list first.`);
+      }
+
+      const amountRaw = BigInt(Math.round(invoiceDetails.amountUsdc * 10_000_000));
+
+      // USDC SAC addresses (Stellar Asset Contract for USDC)
+      const USDC_SAC_TESTNET = 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
+      const USDC_SAC_MAINNET = 'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7EJJUD';
+      const activeNetwork = network;
+      const usdcSacId = activeNetwork === 'mainnet' ? USDC_SAC_MAINNET : USDC_SAC_TESTNET;
+
+      // Step 1: approve Kwagee contract to spend USDC on behalf of client
+      setPayInvoiceLogs(prev => [...prev, {
+        text: `🔐 Step 1/2: Authorizing USDC allowance (${invoiceDetails.amountUsdc} USDC) for contract to pull payment...`,
+        type: "info"
+      }]);
+
+      const rpcUrl = activeNetwork === 'mainnet'
+        ? 'https://soroban-rpc.stellar.org'
+        : 'https://soroban-testnet.stellar.org';
+      const rpcServer = new rpc.Server(rpcUrl);
+      const latestLedger = await rpcServer.getLatestLedger();
+      const expirationLedger = latestLedger.sequence + 17280; // ~24 hours
+
+      const usdcContract = new Contract(usdcSacId);
+      const approveOp = usdcContract.call(
+        "approve",
+        new Address(walletAddress).toScVal(),
+        new Address(CONTRACT_ID).toScVal(),
+        nativeToScVal(amountRaw, { type: "i128" }),
+        nativeToScVal(expirationLedger, { type: "u32" })
+      );
+
+      await sendTransactionWithFreighter(approveOp, setPayInvoiceLogs);
+
+      setPayInvoiceLogs(prev => [...prev, {
+        text: `✅ Allowance approved! Step 2/2: Submitting payment for invoice #${invoiceId}...`,
+        type: "success"
+      }]);
+
+      // Step 2: call pay_invoice on Kwagee contract
+      const kwageeContract = new Contract(CONTRACT_ID);
+      const payOp = kwageeContract.call(
         "pay_invoice",
         new Address(walletAddress).toScVal(),
         nativeToScVal(BigInt(invoiceId), { type: "u64" })
       );
 
-      await sendTransactionWithFreighter(op, setPayInvoiceLogs);
-      
-      setInvoiceIdToPay('');
+      await sendTransactionWithFreighter(payOp, setPayInvoiceLogs);
 
+      setInvoiceIdToPay('');
       triggerReloadData();
     } catch (err) {
       console.error("Pay Invoice Error:", err);
@@ -988,7 +1067,7 @@ function App() {
           if (signRes.error) {
             throw new Error(`Signing failed: ${signRes.error.message || JSON.stringify(signRes.error)}`);
           }
-          const signedTxXdr = signRes.signedTxXdr;
+          const signedTxXdr = typeof signRes === 'string' ? signRes : (signRes.signedTxXdr || signRes.result || signRes);
 
           setTransferLogs(prev => [...prev, { text: '🚀 Submitting signed transaction XDR payload to Stellar Horizon node...', type: 'stellar' }]);
           const response = await server.submitTransaction(
@@ -2824,33 +2903,37 @@ function App() {
 
         return (
           <div key={inv.id} style={{
-            background: 'rgba(255, 255, 255, 0.02)',
-            border: '1px solid rgba(255, 255, 255, 0.04)',
+            background: isUnpaid ? 'rgba(255, 255, 255, 0.02)' : 'rgba(0, 245, 212, 0.04)',
+            border: `1px solid ${isUnpaid ? 'rgba(255,255,255,0.04)' : 'rgba(0,245,212,0.15)'}`,
             borderLeft: `4px solid ${isUnpaid ? 'var(--warning-color)' : 'var(--success-color)'}`,
             borderRadius: '12px',
             padding: '12px',
             display: 'flex',
             flexDirection: 'column',
-            gap: '8px'
+            gap: '8px',
+            opacity: isUnpaid ? 1 : 0.8
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <span style={{ fontSize: '11px', fontWeight: 800, color: '#fff' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 800, color: isUnpaid ? '#fff' : 'var(--text-secondary)', textDecoration: isUnpaid ? 'none' : 'line-through' }}>
                   INVOICE #{inv.id}
                 </span>
                 <span style={{
-                  marginLeft: '8px',
                   padding: '2px 6px',
                   borderRadius: '4px',
                   fontSize: '9px',
                   fontWeight: 800,
                   background: isUnpaid ? 'rgba(255, 159, 28, 0.15)' : 'rgba(0, 245, 212, 0.15)',
-                  color: isUnpaid ? 'var(--warning-color)' : 'var(--success-color)'
+                  color: isUnpaid ? 'var(--warning-color)' : 'var(--success-color)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '3px'
                 }}>
+                  {!isUnpaid && <CheckCircle size={8} />}
                   {displayStatus}
                 </span>
               </div>
-              <span style={{ fontSize: '14px', fontWeight: 800, color: '#fff' }}>
+              <span style={{ fontSize: '14px', fontWeight: 800, color: isUnpaid ? '#fff' : 'var(--success-color)' }}>
                 ${inv.amountUsdc.toLocaleString()} USDC
               </span>
             </div>
@@ -2865,11 +2948,11 @@ function App() {
               alignItems: 'center',
               fontSize: '10px',
               color: 'var(--text-dim)',
-              borderTop: '1px solid rgba(255,255,255,0.03)',
+              borderTop: `1px solid ${isUnpaid ? 'rgba(255,255,255,0.03)' : 'rgba(0,245,212,0.08)'}`,
               paddingTop: '6px'
             }}>
               <span>Worker: {inv.worker.slice(0,6)}...{inv.worker.slice(-6)}</span>
-              {isUnpaid && (
+              {isUnpaid ? (
                 <button
                   onClick={() => handlePayInvoice(inv.id)}
                   disabled={isPayingInvoice}
@@ -2877,16 +2960,35 @@ function App() {
                     background: 'var(--success-color)',
                     border: 'none',
                     color: '#06040d',
-                    padding: '2px 8px',
-                    borderRadius: '4px',
+                    padding: '7px 14px',
+                    borderRadius: '8px',
                     fontWeight: 800,
                     cursor: 'pointer',
-                    fontSize: '9px',
-                    fontFamily: 'var(--font-outfit)'
+                    fontSize: '12px',
+                    fontFamily: 'var(--font-outfit)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px'
                   }}
                 >
+                  <Zap size={13} />
                   Pay Now
                 </button>
+              ) : (
+                <span style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  color: 'var(--success-color)',
+                  background: 'rgba(0, 245, 212, 0.1)',
+                  padding: '4px 10px',
+                  borderRadius: '6px'
+                }}>
+                  <CheckCircle size={11} />
+                  Payment Sent
+                </span>
               )}
             </div>
           </div>
@@ -2977,14 +3079,18 @@ function App() {
                                     background: 'var(--success-color)',
                                     border: 'none',
                                     color: '#06040d',
-                                    padding: '2px 8px',
-                                    borderRadius: '4px',
+                                    padding: '7px 14px',
+                                    borderRadius: '8px',
                                     fontWeight: 800,
                                     cursor: 'pointer',
-                                    fontSize: '9px',
-                                    fontFamily: 'var(--font-outfit)'
+                                    fontSize: '12px',
+                                    fontFamily: 'var(--font-outfit)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '5px'
                                   }}
                                 >
+                                  <Zap size={13} />
                                   Pay Now
                                 </button>
                               )}
