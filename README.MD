@@ -150,11 +150,10 @@ soroban contract invoke \
 
 | Phase | Milestone |
 |-------|-----------|
+| Day 0 | Brainstorming |
 | Day 1 | Soroban contract scaffold, invoice registry, allocation logic |
 | Day 2 | Freighter Wallet integration, frontend split-dashboard |
 | Day 3 | USDC payment flow, multi-destination disbursement |
-| Day 4 | PDAX anchor integration, BIR reconciliation export |
-| Day 5 | End-to-end testing, testnet deployment, demo prep |
 
 ---
 
