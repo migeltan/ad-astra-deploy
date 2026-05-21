@@ -1,3 +1,4 @@
+import kwageeLogo from '../kwagee_logo.png';
 import React, { useState, useEffect } from 'react';
 import { 
   Wallet, 
@@ -1357,7 +1358,7 @@ function App() {
         <div className="landing-card">
           <div className="landing-brand">
             <div className="landing-logo-container" style={{ background: 'transparent', boxShadow: 'none' }}>
-              <img src="/kwagee_logo.png" alt="Kwagee Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              <img src={kwageeLogo} alt="Kwagee Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             </div>
             <h1 className="landing-title">Kwagee</h1>
             <div className="landing-subtitle">On-Chain Self-Budgeting</div>
@@ -1427,7 +1428,7 @@ function App() {
       <header className="app-header">
         <div className="logo-section">
           <div className="logo-icon-container" style={{ background: 'transparent', boxShadow: 'none' }}>
-            <img src="/kwagee_logo.png" alt="Kwagee Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+            <img src={kwageeLogo} alt="Kwagee Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
           </div>
           <div>
             <div className="logo-text">Kwagee</div>
