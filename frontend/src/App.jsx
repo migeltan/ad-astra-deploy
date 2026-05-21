@@ -121,7 +121,7 @@ function App() {
           if (prev === 0 && usdcBalance > 0) {
             return Math.round(usdcBalance * 0.4);
           }
-          return Math.min(prev, usdcBalance);
+          return prev;
         });
 
       } catch (err) {
@@ -303,8 +303,8 @@ function App() {
       <div className="landing-container">
         <div className="landing-card">
           <div className="landing-brand">
-            <div className="landing-logo-container">
-              <Sparkles size={36} className="text-white" />
+            <div className="landing-logo-container" style={{ background: 'transparent', boxShadow: 'none' }}>
+              <img src="/kwagee_logo.png" alt="Kwagee Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
             </div>
             <h1 className="landing-title">Kwagee</h1>
             <div className="landing-subtitle">On-Chain Self-Budgeting</div>
@@ -368,12 +368,12 @@ function App() {
       {/* HEADER SECTION */}
       <header className="app-header">
         <div className="logo-section">
-          <div className="logo-icon-container">
-            <Sparkles size={22} className="text-white" />
+          <div className="logo-icon-container" style={{ background: 'transparent', boxShadow: 'none' }}>
+            <img src="/kwagee_logo.png" alt="Kwagee Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
           </div>
           <div>
             <div className="logo-text">Kwagee</div>
-            <div className="logo-sub">On-Chain Self-Budgeting</div>
+            <div className="logo-sub">Owl You Need!</div>
           </div>
         </div>
         
@@ -787,14 +787,14 @@ function App() {
               }}>
                 <div style={{ flex: 1, minWidth: '200px' }}>
                   <label style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-secondary)', fontWeight: 700, display: 'block', marginBottom: '6px' }}>
-                    Choose Budget Amount (Max: ${balances.usdc} USDC)
+                    Choose Budget Amount (USDC)
                   </label>
                   <input 
                     type="range"
                     min="0"
-                    max={balances.usdc || 1000}
+                    max={balances.usdc > 0 ? Math.max(balances.usdc, budgetAmount) : 1000}
                     value={budgetAmount}
-                    onChange={(e) => setBudgetAmount(Math.min(Number(e.target.value), balances.usdc))}
+                    onChange={(e) => setBudgetAmount(Number(e.target.value))}
                     style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.1)', outline: 'none', borderRadius: '3px', cursor: 'pointer' }}
                   />
                 </div>
@@ -802,9 +802,8 @@ function App() {
                   <input 
                     type="number"
                     min="0"
-                    max={balances.usdc}
                     value={budgetAmount}
-                    onChange={(e) => setBudgetAmount(Math.min(Number(e.target.value), balances.usdc))}
+                    onChange={(e) => setBudgetAmount(Number(e.target.value))}
                     style={{
                       background: 'rgba(255,255,255,0.05)',
                       border: '1px solid var(--border-light)',
@@ -838,10 +837,10 @@ function App() {
                     🏦 Savings Bucket
                   </div>
                   <div style={{ fontSize: '24px', fontWeight: 800, color: '#fff', margin: '4px 0' }}>
-                    ${(balances.usdc - budgetAmount).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
+                    ${Math.max(0, balances.usdc - budgetAmount).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--success-color)', fontWeight: 600 }}>
-                    ₱{((balances.usdc - budgetAmount) * 57).toLocaleString(undefined, { maximumFractionDigits: 0 })} PHP
+                    ₱{(Math.max(0, balances.usdc - budgetAmount) * 57).toLocaleString(undefined, { maximumFractionDigits: 0 })} PHP
                   </div>
                   <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: '4px' }}>
                     Strictly Untouchable
