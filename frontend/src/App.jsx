@@ -16,7 +16,13 @@ import {
   History,
   Lock,
   ArrowDownLeft,
-  Calculator
+  Calculator,
+  Heart,
+  Home,
+  Plus,
+  Trash2,
+  Edit2,
+  Check
 } from 'lucide-react';
 
 function App() {
@@ -50,20 +56,34 @@ function App() {
   const [budgetAmount, setBudgetAmount] = useState(0); // Chosen amount to budget in USDC
   
   // Micro-allocation Percentages of the budgeted amount (Must sum to 100%)
-  const [allocations, setAllocations] = useState({
-    gov: 20,       // Gov Welfare (SSS/PhilHealth/PagIBIG)
-    tax: 15,       // Income Tax Reserve
-    bills: 25,     // Bills & Utilities
-    spendable: 40  // Spendable Cash
-  });
+  const [allocations, setAllocations] = useState([
+    { id: 'sss', label: 'SSS', pct: 15, color: '#ff9f1c', iconName: 'ShieldAlert', isCustom: false },
+    { id: 'philhealth', label: 'Philhealth', pct: 10, color: '#00f5d4', iconName: 'Heart', isCustom: false },
+    { id: 'pagibig', label: 'Pag-IBIG', pct: 10, color: '#3a86ff', iconName: 'Home', isCustom: false },
+    { id: 'tax', label: 'Income Tax Return', pct: 15, color: '#ff0055', iconName: 'Zap', isCustom: false },
+    { id: 'bills', label: 'Bills & Utilities', pct: 20, color: '#9d4edd', iconName: 'RefreshCw', isCustom: false },
+    { id: 'spendable', label: 'Spendable Cash', pct: 30, color: '#ff007f', iconName: 'Coins', isCustom: false }
+  ]);
 
-  // Allocation Config (Labels, Colors, Icons)
-  const allocationConfig = {
-    gov: { label: 'Gov Welfare (SSS/PhilHealth/PagIBIG)', color: '#ff9f1c', icon: ShieldAlert },
-    tax: { label: 'Income Tax Reserve', color: '#ff007f', icon: Zap },
-    bills: { label: 'Bills & Utilities', color: '#3a86ff', icon: RefreshCw },
-    spendable: { label: 'Spendable Cash', color: '#9d4edd', icon: Coins }
+  // Map iconName to standard Lucide React components
+  const iconMap = {
+    ShieldAlert,
+    Heart,
+    Home,
+    Zap,
+    RefreshCw,
+    Coins,
+    Sparkles
   };
+
+  const customColors = ['#00b4d8', '#ff70a6', '#ff9770', '#ffd670', '#80ffdb', '#e0aaff', '#9d4edd'];
+
+  // State for adding/editing custom allocations
+  const [editingId, setEditingId] = useState(null);
+  const [editingName, setEditingName] = useState('');
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newAllocName, setNewAllocName] = useState('');
+  const [newAllocPct, setNewAllocPct] = useState(10);
 
   // Transfer Form States
   const [transferRecipient, setTransferRecipient] = useState('');
@@ -182,25 +202,42 @@ function App() {
   }, [balances.usdc, isSandboxMode, budgetAmount]);
 
   // Calculate sum of micro-allocations
-  const totalAllocationPct = allocations.gov + allocations.tax + allocations.bills + allocations.spendable;
+  const totalAllocationPct = allocations.reduce((sum, item) => sum + item.pct, 0);
 
   // Auto-balance Allocations to equal 100%
   const handleAutoBalance = () => {
-    setAllocations({
-      gov: 20,
-      tax: 15,
-      bills: 25,
-      spendable: 40
-    });
+    const total = allocations.reduce((sum, item) => sum + item.pct, 0);
+    if (total === 0) {
+      const equalShare = Math.floor(100 / allocations.length);
+      const updated = allocations.map((item, idx) => ({
+        ...item,
+        pct: idx === allocations.length - 1 ? 100 - equalShare * (allocations.length - 1) : equalShare
+      }));
+      setAllocations(updated);
+    } else {
+      let runningSum = 0;
+      const updated = allocations.map((item, idx) => {
+        if (idx === allocations.length - 1) {
+          return {
+            ...item,
+            pct: Math.max(0, 100 - runningSum)
+          };
+        }
+        const scaled = Math.round((item.pct / total) * 100);
+        runningSum += scaled;
+        return {
+          ...item,
+          pct: scaled
+        };
+      });
+      setAllocations(updated);
+    }
   };
 
   // Update a single micro-allocation percentage
-  const handleAllocationChange = (key, value) => {
+  const handleAllocationChange = (id, value) => {
     const val = parseInt(value, 10) || 0;
-    setAllocations(prev => ({
-      ...prev,
-      [key]: val
-    }));
+    setAllocations(prev => prev.map(item => item.id === id ? { ...item, pct: val } : item));
   };
 
   // Trigger simulated transfer with live console logging
@@ -1099,31 +1136,272 @@ function App() {
                   Micro-Allocations Split (Obligations)
                 </div>
 
-                {Object.keys(allocations).map((key) => {
-                  const config = allocationConfig[key];
-                  const IconComp = config.icon;
+                {allocations.map((item) => {
+                  const IconComp = iconMap[item.iconName] || Coins;
                   return (
-                    <div key={key} className={`slider-group ${key}`}>
-                      <div className="slider-header">
-                        <span className="slider-label">
-                          <IconComp size={16} style={{ color: config.color }} />
-                          {config.label}
+                    <div key={item.id} className={`slider-group ${item.id}`}>
+                      <div className="slider-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span className="slider-label" style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+                          <IconComp size={16} style={{ color: item.color, flexShrink: 0 }} />
+                          {editingId === item.id ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <input
+                                type="text"
+                                value={editingName}
+                                onChange={(e) => setEditingName(e.target.value)}
+                                style={{
+                                  padding: '2px 6px',
+                                  fontSize: '12px',
+                                  background: 'rgba(10, 6, 22, 0.8)',
+                                  border: '1px solid var(--purple-light)',
+                                  color: '#fff',
+                                  borderRadius: '6px',
+                                  width: '140px',
+                                  outline: 'none',
+                                  fontFamily: 'var(--font-outfit)'
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    if (editingName.trim()) {
+                                      setAllocations(prev => prev.map(a => a.id === item.id ? { ...a, label: editingName.trim() } : a));
+                                      setEditingId(null);
+                                    }
+                                  }
+                                }}
+                                autoFocus
+                              />
+                              <button
+                                onClick={() => {
+                                  if (editingName.trim()) {
+                                    setAllocations(prev => prev.map(a => a.id === item.id ? { ...a, label: editingName.trim() } : a));
+                                    setEditingId(null);
+                                  }
+                                }}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: 'var(--success-color)',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  padding: '2px'
+                                }}
+                              >
+                                <Check size={14} />
+                              </button>
+                            </div>
+                          ) : (
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span>{item.label}</span>
+                              {item.isCustom && (
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '4px' }}>
+                                  <button
+                                    onClick={() => {
+                                      setEditingId(item.id);
+                                      setEditingName(item.label);
+                                    }}
+                                    title="Rename"
+                                    style={{
+                                      background: 'transparent',
+                                      border: 'none',
+                                      color: 'var(--text-dim)',
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      padding: '2px',
+                                      transition: 'color 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.color = '#fff'}
+                                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-dim)'}
+                                  >
+                                    <Edit2 size={11} />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setAllocations(prev => prev.filter(a => a.id !== item.id));
+                                    }}
+                                    title="Delete"
+                                    style={{
+                                      background: 'transparent',
+                                      border: 'none',
+                                      color: 'var(--text-dim)',
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      padding: '2px',
+                                      transition: 'color 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => e.currentTarget.style.color = '#ff0055'}
+                                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-dim)'}
+                                  >
+                                    <Trash2 size={11} />
+                                  </button>
+                                </span>
+                              )}
+                            </span>
+                          )}
                         </span>
-                        <span className="slider-pct" style={{ color: config.color }}>
-                          {allocations[key]}%
+                        <span className="slider-pct" style={{ color: item.color, fontWeight: 700, minWidth: '40px', textAlign: 'right' }}>
+                          {item.pct}%
                         </span>
                       </div>
                       <input 
                         type="range"
                         min="0"
                         max="100"
-                        value={allocations[key]}
+                        value={item.pct}
                         className="custom-range"
-                        onChange={(e) => handleAllocationChange(key, e.target.value)}
+                        onChange={(e) => handleAllocationChange(item.id, e.target.value)}
                       />
                     </div>
                   );
                 })}
+
+                {/* Add Custom Allocation Form / Button */}
+                {!showAddForm ? (
+                  <button
+                    onClick={() => {
+                      setShowAddForm(true);
+                      setNewAllocName('');
+                      setNewAllocPct(10);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      background: 'rgba(157, 78, 221, 0.1)',
+                      border: '1px dashed rgba(157, 78, 221, 0.3)',
+                      color: 'var(--purple-light)',
+                      padding: '8px 14px',
+                      borderRadius: '10px',
+                      fontSize: '12px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      marginTop: '12px',
+                      width: '100%',
+                      justifyContent: 'center',
+                      transition: 'all 0.2s ease',
+                      fontFamily: 'var(--font-outfit)'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(157, 78, 221, 0.2)';
+                      e.currentTarget.style.borderColor = 'rgba(157, 78, 221, 0.5)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(157, 78, 221, 0.1)';
+                      e.currentTarget.style.borderColor = 'rgba(157, 78, 221, 0.3)';
+                    }}
+                  >
+                    <Plus size={14} />
+                    <span>Add Custom Allocation</span>
+                  </button>
+                ) : (
+                  <div style={{
+                    background: 'rgba(10, 6, 22, 0.5)',
+                    border: '1px solid var(--border-light)',
+                    borderRadius: '12px',
+                    padding: '12px',
+                    marginTop: '12px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px'
+                  }}>
+                    <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', color: 'var(--purple-light)' }}>
+                      New Custom Allocation
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <input
+                        type="text"
+                        placeholder="Allocation Name (e.g. Vacation)"
+                        value={newAllocName}
+                        onChange={(e) => setNewAllocName(e.target.value)}
+                        style={{
+                          background: 'rgba(255,255,255,0.05)',
+                          border: '1px solid var(--border-light)',
+                          color: '#fff',
+                          borderRadius: '8px',
+                          padding: '6px 10px',
+                          fontSize: '12px',
+                          flex: 2,
+                          minWidth: '130px',
+                          outline: 'none',
+                          fontFamily: 'var(--font-outfit)'
+                        }}
+                      />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: 1, minWidth: '80px' }}>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          placeholder="%"
+                          value={newAllocPct}
+                          onChange={(e) => setNewAllocPct(Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)))}
+                          style={{
+                            background: 'rgba(255,255,255,0.05)',
+                            border: '1px solid var(--border-light)',
+                            color: '#fff',
+                            borderRadius: '8px',
+                            padding: '6px',
+                            fontSize: '12px',
+                            width: '45px',
+                            textAlign: 'center',
+                            outline: 'none',
+                            fontFamily: 'var(--font-outfit)'
+                          }}
+                        />
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>%</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                      <button
+                        onClick={() => setShowAddForm(false)}
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          color: 'var(--text-secondary)',
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          fontFamily: 'var(--font-outfit)'
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => {
+                          const name = newAllocName.trim();
+                          if (!name) {
+                            alert('Please enter a name for the custom allocation.');
+                            return;
+                          }
+                          const color = customColors[allocations.length % customColors.length];
+                          const newAlloc = {
+                            id: 'custom_' + Date.now(),
+                            label: name,
+                            pct: newAllocPct,
+                            color: color,
+                            iconName: 'Coins',
+                            isCustom: true
+                          };
+                          setAllocations(prev => [...prev, newAlloc]);
+                          setShowAddForm(false);
+                        }}
+                        style={{
+                          background: 'var(--purple-light)',
+                          border: 'none',
+                          color: '#fff',
+                          padding: '4px 10px',
+                          borderRadius: '6px',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          fontFamily: 'var(--font-outfit)'
+                        }}
+                      >
+                        Add
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Validation Indicator */}
                 {totalAllocationPct !== 100 ? (
@@ -1141,7 +1419,8 @@ function App() {
                         borderRadius: '6px',
                         cursor: 'pointer',
                         fontSize: '11px',
-                        fontWeight: 700
+                        fontWeight: 700,
+                        fontFamily: 'var(--font-outfit)'
                       }}
                     >
                       Auto-Balance
@@ -1166,72 +1445,58 @@ function App() {
               <div className="allocation-chart-panel" style={{ border: 'none', background: 'transparent', padding: 0 }}>
                 <div className="chart-visual" style={{ width: '200px', height: '200px' }}>
                   <svg width="100%" height="100%" viewBox="0 0 160 160">
-                    <circle cx="80" cy="80" r="70" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="8" />
-                    <circle cx="80" cy="80" r="58" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="8" />
-                    <circle cx="80" cy="80" r="46" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="8" />
-                    <circle cx="80" cy="80" r="34" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="8" />
-                    
-                    {/* Ring 1: Spendable */}
-                    <circle cx="80" cy="80" r="70" fill="none" 
-                      stroke={allocationConfig.spendable.color} 
-                      strokeWidth="8" 
-                      strokeDasharray="439.8"
-                      strokeDashoffset={439.8 - (439.8 * allocations.spendable) / 100}
-                      strokeLinecap="round"
-                      transform="rotate(-90 80 80)"
-                      style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
-                    />
-
-                    {/* Ring 2: Bills */}
-                    <circle cx="80" cy="80" r="58" fill="none" 
-                      stroke={allocationConfig.bills.color} 
-                      strokeWidth="8" 
-                      strokeDasharray="364.4"
-                      strokeDashoffset={364.4 - (364.4 * allocations.bills) / 100}
-                      strokeLinecap="round"
-                      transform="rotate(-90 80 80)"
-                      style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
-                    />
-
-                    {/* Ring 3: Gov */}
-                    <circle cx="80" cy="80" r="46" fill="none" 
-                      stroke={allocationConfig.gov.color} 
-                      strokeWidth="8" 
-                      strokeDasharray="289.0"
-                      strokeDashoffset={289.0 - (289.0 * allocations.gov) / 100}
-                      strokeLinecap="round"
-                      transform="rotate(-90 80 80)"
-                      style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
-                    />
-
-                    {/* Ring 4: Tax */}
-                    <circle cx="80" cy="80" r="34" fill="none" 
-                      stroke={allocationConfig.tax.color} 
-                      strokeWidth="8" 
-                      strokeDasharray="213.6"
-                      strokeDashoffset={213.6 - (213.6 * allocations.tax) / 100}
-                      strokeLinecap="round"
-                      transform="rotate(-90 80 80)"
-                      style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
-                    />
+                    {/* Dynamic Concentric Rings */}
+                    {allocations.slice(0, 8).map((item, index) => {
+                      const maxRings = Math.max(allocations.slice(0, 8).length, 6);
+                      const ringWidth = Math.min(8, 48 / maxRings);
+                      const r = 72 - index * (ringWidth + 2.2);
+                      const circ = 2 * Math.PI * r;
+                      const strokeDashoffset = circ - (circ * Math.max(0, Math.min(100, item.pct))) / 100;
+                      return (
+                        <g key={item.id}>
+                          {/* Background ring for track */}
+                          <circle 
+                            cx="80" 
+                            cy="80" 
+                            r={r} 
+                            fill="none" 
+                            stroke="rgba(255,255,255,0.02)" 
+                            strokeWidth={ringWidth} 
+                          />
+                          {/* Active ring */}
+                          <circle 
+                            cx="80" 
+                            cy="80" 
+                            r={r} 
+                            fill="none" 
+                            stroke={item.color} 
+                            strokeWidth={ringWidth} 
+                            strokeDasharray={circ}
+                            strokeDashoffset={strokeDashoffset}
+                            strokeLinecap="round"
+                            transform="rotate(-90 80 80)"
+                            style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
+                          />
+                        </g>
+                      );
+                    })}
                   </svg>
-
+ 
                   <div className="chart-center-info">
                     <div className="chart-center-val">${budgetAmount}</div>
                     <div className="chart-center-lbl">Active Budget</div>
                   </div>
                 </div>
-
+ 
                 <div className="chart-details-list">
-                  {Object.keys(allocations).map((key) => {
-                    const pct = allocations[key];
-                    const valUsd = (budgetAmount * pct) / 100;
+                  {allocations.map((item) => {
+                    const valUsd = (budgetAmount * item.pct) / 100;
                     const valPhp = valUsd * 57;
                     return (
-                      <div key={key} className="chart-detail-item">
+                      <div key={item.id} className="chart-detail-item">
                         <span className="chart-detail-label">
-                          <div className="color-indicator" style={{ backgroundColor: allocationConfig[key].color }}></div>
-                          {key.toUpperCase()} ({pct}%)
+                          <div className="color-indicator" style={{ backgroundColor: item.color }}></div>
+                          {item.label} ({item.pct}%)
                         </span>
                         <div className="chart-detail-values">
                           <span className="chart-detail-val-usd">${valUsd.toFixed(2)} USDC</span>
