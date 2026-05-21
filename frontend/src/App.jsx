@@ -143,6 +143,7 @@ function App() {
   const [workerInvoices, setWorkerInvoices] = useState([]);
   const [clientInvoices, setClientInvoices] = useState([]);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
+  const [invoiceFeedTab, setInvoiceFeedTab] = useState('incoming'); // 'incoming' | 'sent'
 
   // Withdraw Bucket States
   const [withdrawingBucket, setWithdrawingBucket] = useState(null);
@@ -156,13 +157,40 @@ function App() {
 
   // Helper to resolve Soroban Enum Variant names
   const resolveStatus = (statusObj) => {
-    if (!statusObj) return 'Unknown';
-    if (typeof statusObj === 'string') return statusObj;
+    if (!statusObj) return 'Unpaid';
+    if (typeof statusObj === 'string') {
+      const s = statusObj.toLowerCase();
+      if (s === '0' || s === 'unpaid') return 'Unpaid';
+      if (s === '1' || s === 'pending') return 'Pending';
+      if (s === '2' || s === 'paid') return 'Paid';
+      return statusObj;
+    }
     if (statusObj.name) return statusObj.name;
     if (typeof statusObj === 'object') {
-      return Object.keys(statusObj)[0] || 'Unknown';
+      return Object.keys(statusObj)[0] || 'Unpaid';
     }
+    const n = Number(statusObj);
+    if (n === 0) return 'Unpaid';
+    if (n === 1) return 'Pending';
+    if (n === 2) return 'Paid';
     return String(statusObj);
+  };
+
+  // Get status display config: color, label, bg
+  const getStatusConfig = (status) => {
+    const s = (status || '').toLowerCase();
+    if (s === 'paid') return {
+      label: 'Paid', color: '#00e676', bg: 'rgba(0,230,118,0.12)',
+      border: 'rgba(0,230,118,0.25)', borderLeft: '#00e676', cardBg: 'rgba(0,230,118,0.04)',
+    };
+    if (s === 'pending') return {
+      label: 'Pending', color: '#ff9f1c', bg: 'rgba(255,159,28,0.12)',
+      border: 'rgba(255,159,28,0.25)', borderLeft: '#ff9f1c', cardBg: 'rgba(255,159,28,0.03)',
+    };
+    return {
+      label: 'Unpaid', color: '#ff3d5a', bg: 'rgba(255,61,90,0.12)',
+      border: 'rgba(255,61,90,0.25)', borderLeft: '#ff3d5a', cardBg: 'rgba(255,61,90,0.03)',
+    };
   };
 
   // Helper to submit a transaction using Freighter
@@ -445,35 +473,103 @@ function App() {
     setPayInvoiceLogs([]);
 
     try {
-      // Step 0: find invoice details for the amount
-      const invoiceDetails = [...clientInvoices, ...workerInvoices].find(
-        inv => String(inv.id) === String(invoiceId)
-      );
-
-      if (!invoiceDetails) {
-        throw new Error(`Invoice #${invoiceId} not found locally. Please refresh the invoice list first.`);
-      }
-
-      const amountRaw = BigInt(Math.round(invoiceDetails.amountUsdc * 10_000_000));
-
       // USDC SAC addresses (Stellar Asset Contract for USDC)
       const USDC_SAC_TESTNET = 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
       const USDC_SAC_MAINNET = 'CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7EJJUD';
-      const activeNetwork = network;
-      const usdcSacId = activeNetwork === 'mainnet' ? USDC_SAC_MAINNET : USDC_SAC_TESTNET;
 
-      // Step 1: approve Kwagee contract to spend USDC on behalf of client
-      setPayInvoiceLogs(prev => [...prev, {
-        text: `🔐 Step 1/2: Authorizing USDC allowance (${invoiceDetails.amountUsdc} USDC) for contract to pull payment...`,
-        type: "info"
-      }]);
+      // Resolve active network from Freighter first, then build everything from that
+      let activeNetwork = network;
+      try {
+        const netRes = await getNetwork();
+        if (netRes && !netRes.error && netRes.network) {
+          const netLower = netRes.network.toLowerCase();
+          activeNetwork = (netLower === 'public' || netLower === 'mainnet') ? 'mainnet' : 'testnet';
+          if (activeNetwork !== network) setNetwork(activeNetwork);
+        }
+      } catch (e) {
+        console.warn("Could not retrieve Freighter network for payment:", e);
+      }
 
+      const fallbackUsdcSacId = activeNetwork === 'mainnet' ? USDC_SAC_MAINNET : USDC_SAC_TESTNET;
       const rpcUrl = activeNetwork === 'mainnet'
         ? 'https://soroban-rpc.stellar.org'
         : 'https://soroban-testnet.stellar.org';
+      const passphrase = activeNetwork === 'mainnet' ? Networks.PUBLIC : Networks.TESTNET;
       const rpcServer = new rpc.Server(rpcUrl);
+
+      setPayInvoiceLogs([{
+        text: `🔍 Resolving invoice #${invoiceId} on ${activeNetwork.toUpperCase()}...`,
+        type: "info"
+      }]);
+
+      // Step 0: Fetch the invoice amount FRESH from chain to avoid float precision loss
+      const cleanAddress = walletAddress.trim();
+      const dummyAccount = new Account(cleanAddress, "0");
+      const contract = new Contract(CONTRACT_ID);
+
+      // Step 0a: Try to get the USDC token address directly from the contract
+      // This ensures the approve() is called on the EXACT same token the contract uses internally
+      let usdcSacId = fallbackUsdcSacId;
+      try {
+        const usdcAddrTx = new TransactionBuilder(dummyAccount, {
+          fee: BASE_FEE,
+          networkPassphrase: passphrase,
+        })
+          .addOperation(contract.call("get_usdc_token"))
+          .setTimeout(180)
+          .build();
+        const usdcAddrSim = await rpcServer.simulateTransaction(usdcAddrTx);
+        if (!usdcAddrSim.error && usdcAddrSim.result?.retval) {
+          const contractUsdcAddr = scValToNative(usdcAddrSim.result.retval);
+          if (contractUsdcAddr && typeof contractUsdcAddr === 'string' && contractUsdcAddr.length > 30) {
+            usdcSacId = contractUsdcAddr;
+            setPayInvoiceLogs(prev => [...prev, {
+              text: `🔗 Contract USDC token resolved: ${usdcSacId.slice(0,8)}...${usdcSacId.slice(-6)}`,
+              type: "stellar"
+            }]);
+          }
+        }
+      } catch (e) {
+        // Contract may not expose get_usdc_token — fall back to known SAC address
+        setPayInvoiceLogs(prev => [...prev, {
+          text: `ℹ️ Using default USDC SAC: ${usdcSacId.slice(0,8)}...${usdcSacId.slice(-6)}`,
+          type: "info"
+        }]);
+      }
+
+      const detailTx = new TransactionBuilder(dummyAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: passphrase,
+      })
+        .addOperation(
+          contract.call("get_invoice", nativeToScVal(BigInt(invoiceId), { type: "u64" }))
+        )
+        .setTimeout(180)
+        .build();
+
+      const detailSim = await rpcServer.simulateTransaction(detailTx);
+      if (detailSim.error || !detailSim.result?.retval) {
+        throw new Error(`Could not fetch invoice #${invoiceId} from chain: ${detailSim.error || 'no return value'}`);
+      }
+
+      const invoiceData = scValToNative(detailSim.result.retval);
+      // amount_usdc is stored as i128 in stroops (7 decimals), read it as BigInt directly
+      const amountRaw = BigInt(invoiceData.amount_usdc);
+      const amountDisplay = Number(amountRaw) / 10_000_000;
+
+      setPayInvoiceLogs(prev => [...prev, {
+        text: `📋 Invoice found: ${amountDisplay} USDC — verifying USDC SAC: ${usdcSacId.slice(0,8)}...`,
+        type: "stellar"
+      }]);
+
+      // Step 1: approve Kwagee contract to spend USDC on behalf of client
+      setPayInvoiceLogs(prev => [...prev, {
+        text: `🔐 Step 1/2: Approving USDC allowance of ${amountDisplay} USDC for contract to pull...`,
+        type: "info"
+      }]);
+
       const latestLedger = await rpcServer.getLatestLedger();
-      const expirationLedger = latestLedger.sequence + 17280; // ~24 hours
+      const expirationLedger = latestLedger.sequence + 500; // ~1 hour, tight window to avoid stale approvals
 
       const usdcContract = new Contract(usdcSacId);
       const approveOp = usdcContract.call(
@@ -487,11 +583,13 @@ function App() {
       await sendTransactionWithFreighter(approveOp, setPayInvoiceLogs);
 
       setPayInvoiceLogs(prev => [...prev, {
-        text: `✅ Allowance approved! Step 2/2: Submitting payment for invoice #${invoiceId}...`,
+        text: `✅ Allowance approved on USDC SAC! Step 2/2: Calling pay_invoice #${invoiceId}...`,
         type: "success"
       }]);
 
       // Step 2: call pay_invoice on Kwagee contract
+      // The contract must call transfer_from(client, worker, amount) on the SAME usdcSacId above.
+      // If USDC is not being deducted after this step, verify your contract's hardcoded USDC address matches: ${usdcSacId}
       const kwageeContract = new Contract(CONTRACT_ID);
       const payOp = kwageeContract.call(
         "pay_invoice",
@@ -500,6 +598,11 @@ function App() {
       );
 
       await sendTransactionWithFreighter(payOp, setPayInvoiceLogs);
+
+      setPayInvoiceLogs(prev => [...prev, {
+        text: `🎉 Invoice #${invoiceId} paid successfully! ${amountDisplay} USDC transferred.`,
+        type: "success"
+      }]);
 
       setInvoiceIdToPay('');
       triggerReloadData();
@@ -2869,235 +2972,363 @@ function App() {
                   )}
                 </div>
 
-                {/* Worker Invoices Feed */}
+                {/* Invoice Feed Tabs */}
                 <div>
-                  <div style={{ fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '10px' }}>
-                    On-Chain Invoices Feed
+                  {/* Tab Header */}
+                  <div style={{
+                    display: 'flex',
+                    gap: '0',
+                    marginBottom: '14px',
+                    background: 'rgba(0,0,0,0.3)',
+                    borderRadius: '12px',
+                    padding: '4px',
+                    border: '1px solid rgba(255,255,255,0.06)'
+                  }}>
+                    <button
+                      onClick={() => setInvoiceFeedTab('incoming')}
+                      style={{
+                        flex: 1,
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontFamily: 'var(--font-outfit)',
+                        fontWeight: 800,
+                        fontSize: '11px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                        transition: 'all 0.2s',
+                        background: invoiceFeedTab === 'incoming'
+                          ? 'linear-gradient(135deg, rgba(0,245,212,0.18) 0%, rgba(0,196,167,0.10) 100%)'
+                          : 'transparent',
+                        color: invoiceFeedTab === 'incoming' ? '#00f5d4' : 'var(--text-dim)',
+                        boxShadow: invoiceFeedTab === 'incoming' ? '0 0 12px rgba(0,245,212,0.15)' : 'none',
+                        borderBottom: invoiceFeedTab === 'incoming' ? '2px solid #00f5d4' : '2px solid transparent',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <ArrowDownLeft size={13} />
+                      Incoming
+                      {clientInvoices.length > 0 && (
+                        <span style={{
+                          background: invoiceFeedTab === 'incoming' ? '#00f5d4' : 'rgba(255,255,255,0.15)',
+                          color: invoiceFeedTab === 'incoming' ? '#06040d' : 'var(--text-secondary)',
+                          borderRadius: '10px',
+                          padding: '1px 6px',
+                          fontSize: '10px',
+                          fontWeight: 800,
+                          minWidth: '18px',
+                          textAlign: 'center'
+                        }}>
+                          {clientInvoices.filter(i => resolveStatus(i.status) === 'Unpaid').length || clientInvoices.length}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setInvoiceFeedTab('sent')}
+                      style={{
+                        flex: 1,
+                        padding: '9px 12px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontFamily: 'var(--font-outfit)',
+                        fontWeight: 800,
+                        fontSize: '11px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                        transition: 'all 0.2s',
+                        background: invoiceFeedTab === 'sent'
+                          ? 'linear-gradient(135deg, rgba(157,78,221,0.18) 0%, rgba(160,32,240,0.10) 100%)'
+                          : 'transparent',
+                        color: invoiceFeedTab === 'sent' ? 'var(--purple-light)' : 'var(--text-dim)',
+                        boxShadow: invoiceFeedTab === 'sent' ? '0 0 12px rgba(157,78,221,0.15)' : 'none',
+                        borderBottom: invoiceFeedTab === 'sent' ? '2px solid var(--purple-accent)' : '2px solid transparent',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <ArrowUpRight size={13} />
+                      Sent / Billed
+                      {workerInvoices.length > 0 && (
+                        <span style={{
+                          background: invoiceFeedTab === 'sent' ? 'var(--purple-accent)' : 'rgba(255,255,255,0.15)',
+                          color: invoiceFeedTab === 'sent' ? '#fff' : 'var(--text-secondary)',
+                          borderRadius: '10px',
+                          padding: '1px 6px',
+                          fontSize: '10px',
+                          fontWeight: 800,
+                          minWidth: '18px',
+                          textAlign: 'center'
+                        }}>
+                          {workerInvoices.length}
+                        </span>
+                      )}
+                    </button>
                   </div>
 
-
-                {/* Client Invoices Feed */}
-<div>
-  <div style={{ fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', color: 'var(--text-secondary)', marginBottom: '10px' }}>
-    Invoices Assigned to You
-  </div>
-
-  {clientInvoices.length === 0 ? (
-    <div style={{
-      padding: '24px 12px',
-      textAlign: 'center',
-      background: 'rgba(255,255,255,0.01)',
-      borderRadius: '12px',
-      border: '1px dashed var(--border-light)',
-      color: 'var(--text-dim)',
-      fontSize: '12px'
-    }}>
-      No invoices assigned to you.
-    </div>
-  ) : (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '250px', overflowY: 'auto', paddingRight: '4px' }}>
-      {clientInvoices.map((inv) => {
-        const status = inv.status;
-        const displayStatus = (status === 'Unpaid' || status === '0' || status === 0) ? 'Unpaid' : 'Paid';
-        const isUnpaid = displayStatus === 'Unpaid';
-
-        return (
-          <div key={inv.id} style={{
-            background: isUnpaid ? 'rgba(255, 255, 255, 0.02)' : 'rgba(0, 245, 212, 0.04)',
-            border: `1px solid ${isUnpaid ? 'rgba(255,255,255,0.04)' : 'rgba(0,245,212,0.15)'}`,
-            borderLeft: `4px solid ${isUnpaid ? 'var(--warning-color)' : 'var(--success-color)'}`,
-            borderRadius: '12px',
-            padding: '12px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px',
-            opacity: isUnpaid ? 1 : 0.8
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '11px', fontWeight: 800, color: isUnpaid ? '#fff' : 'var(--text-secondary)', textDecoration: isUnpaid ? 'none' : 'line-through' }}>
-                  INVOICE #{inv.id}
-                </span>
-                <span style={{
-                  padding: '2px 6px',
-                  borderRadius: '4px',
-                  fontSize: '9px',
-                  fontWeight: 800,
-                  background: isUnpaid ? 'rgba(255, 159, 28, 0.15)' : 'rgba(0, 245, 212, 0.15)',
-                  color: isUnpaid ? 'var(--warning-color)' : 'var(--success-color)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '3px'
-                }}>
-                  {!isUnpaid && <CheckCircle size={8} />}
-                  {displayStatus}
-                </span>
-              </div>
-              <span style={{ fontSize: '14px', fontWeight: 800, color: isUnpaid ? '#fff' : 'var(--success-color)' }}>
-                ${inv.amountUsdc.toLocaleString()} USDC
-              </span>
-            </div>
-
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              {inv.description}
-            </div>
-
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              fontSize: '10px',
-              color: 'var(--text-dim)',
-              borderTop: `1px solid ${isUnpaid ? 'rgba(255,255,255,0.03)' : 'rgba(0,245,212,0.08)'}`,
-              paddingTop: '6px'
-            }}>
-              <span>Worker: {inv.worker.slice(0,6)}...{inv.worker.slice(-6)}</span>
-              {isUnpaid ? (
-                <button
-                  onClick={() => handlePayInvoice(inv.id)}
-                  disabled={isPayingInvoice}
-                  style={{
-                    background: 'var(--success-color)',
-                    border: 'none',
-                    color: '#06040d',
-                    padding: '7px 14px',
-                    borderRadius: '8px',
-                    fontWeight: 800,
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                    fontFamily: 'var(--font-outfit)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '5px'
-                  }}
-                >
-                  <Zap size={13} />
-                  Pay Now
-                </button>
-              ) : (
-                <span style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  fontSize: '10px',
-                  fontWeight: 700,
-                  color: 'var(--success-color)',
-                  background: 'rgba(0, 245, 212, 0.1)',
-                  padding: '4px 10px',
-                  borderRadius: '6px'
-                }}>
-                  <CheckCircle size={11} />
-                  Payment Sent
-                </span>
-              )}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  )}
-</div>  
-                
-                  
-
-
-
-                  {workerInvoices.length === 0 ? (
-                    <div style={{
-                      padding: '24px 12px',
-                      textAlign: 'center',
-                      background: 'rgba(255,255,255,0.01)',
-                      borderRadius: '12px',
-                      border: '1px dashed var(--border-light)',
-                      color: 'var(--text-dim)',
-                      fontSize: '12px'
-                    }}>
-                      No on-chain invoices found for your wallet address.
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '250px', overflowY: 'auto', paddingRight: '4px' }}>
-                      {workerInvoices.map((inv) => {
-                        const isWorker = inv.worker === walletAddress;
-                        const status = inv.status;
-                        const displayStatus = (status === 'Unpaid' || status === '0' || status === 0) ? 'Unpaid' : 'Paid';
-                        const isUnpaid = displayStatus === 'Unpaid';
-
-                        return (
-                          <div key={inv.id} style={{
-                            background: 'rgba(255, 255, 255, 0.02)',
-                            border: '1px solid rgba(255, 255, 255, 0.04)',
-                            borderLeft: `4px solid ${isUnpaid ? 'var(--warning-color)' : 'var(--success-color)'}`,
-                            borderRadius: '12px',
-                            padding: '12px',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '8px'
-                          }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <div>
-                                <span style={{ fontSize: '11px', fontWeight: 800, color: '#fff' }}>
-                                  INVOICE #{inv.id}
-                                </span>
-                                <span style={{
-                                  marginLeft: '8px',
-                                  padding: '2px 6px',
-                                  borderRadius: '4px',
-                                  fontSize: '9px',
-                                  fontWeight: 800,
-                                  background: isUnpaid ? 'rgba(255, 159, 28, 0.15)' : 'rgba(0, 245, 212, 0.15)',
-                                  color: isUnpaid ? 'var(--warning-color)' : 'var(--success-color)'
+                  {/* INCOMING (Client) Invoices Panel */}
+                  {invoiceFeedTab === 'incoming' && (
+                    <div>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        marginBottom: '10px', paddingBottom: '8px',
+                        borderBottom: '1px solid rgba(0,245,212,0.12)'
+                      }}>
+                        <div style={{
+                          width: '6px', height: '6px', borderRadius: '50%',
+                          background: '#00f5d4',
+                          boxShadow: '0 0 6px #00f5d4'
+                        }} />
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: '#00f5d4', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                          Invoices Assigned to You
+                        </span>
+                        <span style={{ fontSize: '10px', color: 'var(--text-dim)', marginLeft: 'auto' }}>
+                          You are the payer
+                        </span>
+                      </div>
+                      {clientInvoices.length === 0 ? (
+                        <div style={{
+                          padding: '28px 12px', textAlign: 'center',
+                          background: 'rgba(0,245,212,0.02)',
+                          borderRadius: '12px',
+                          border: '1px dashed rgba(0,245,212,0.15)',
+                          color: 'var(--text-dim)', fontSize: '12px'
+                        }}>
+                          <ArrowDownLeft size={24} style={{ color: 'rgba(0,245,212,0.25)', marginBottom: '8px' }} />
+                          <div>No incoming invoices found.</div>
+                          <div style={{ fontSize: '10px', marginTop: '4px', opacity: 0.7 }}>Invoices billed to your address will appear here.</div>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '400px', overflowY: 'auto', paddingRight: '4px' }}>
+                          {clientInvoices.map((inv) => {
+                            const sc = getStatusConfig(inv.status);
+                            const isUnpaid = sc.label === 'Unpaid';
+                            const isPaid = sc.label === 'Paid';
+                            const isPending = sc.label === 'Pending';
+                            return (
+                              <div key={inv.id} style={{
+                                background: isUnpaid
+                                  ? 'linear-gradient(135deg, rgba(0,245,212,0.04) 0%, rgba(10,6,22,0.7) 100%)'
+                                  : sc.cardBg,
+                                border: `1px solid ${isUnpaid ? 'rgba(0,245,212,0.2)' : sc.border}`,
+                                borderLeft: `4px solid ${isUnpaid ? '#00f5d4' : sc.borderLeft}`,
+                                borderRadius: '14px', padding: '14px',
+                                display: 'flex', flexDirection: 'column', gap: '10px',
+                                opacity: isPaid ? 0.7 : 1, transition: 'opacity 0.2s'
+                              }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                    <span style={{
+                                      fontSize: '11px', fontWeight: 800, letterSpacing: '0.05em',
+                                      color: isPaid ? 'var(--text-secondary)' : '#fff',
+                                      textDecoration: isPaid ? 'line-through' : 'none'
+                                    }}>INVOICE #{inv.id}</span>
+                                    <span style={{
+                                      display: 'inline-flex', alignItems: 'center', gap: '4px',
+                                      padding: '3px 8px', borderRadius: '20px', fontSize: '9px', fontWeight: 800,
+                                      background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`,
+                                      width: 'fit-content'
+                                    }}>
+                                      {isPaid && <CheckCircle size={8} />}
+                                      {isPending && <RefreshCw size={8} />}
+                                      {isUnpaid && <Zap size={8} />}
+                                      {sc.label}
+                                    </span>
+                                  </div>
+                                  <div style={{ textAlign: 'right' }}>
+                                    <div style={{ fontSize: '18px', fontWeight: 800, color: isPaid ? sc.color : '#fff' }}>
+                                      ${inv.amountUsdc.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </div>
+                                    <div style={{ fontSize: '9px', color: '#00f5d4', fontWeight: 700 }}>USDC</div>
+                                  </div>
+                                </div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                                  {inv.description}
+                                </div>
+                                <div style={{
+                                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                  fontSize: '10px', color: 'var(--text-dim)',
+                                  borderTop: `1px solid ${isUnpaid ? 'rgba(0,245,212,0.12)' : sc.border}`, paddingTop: '8px'
                                 }}>
-                                  {displayStatus}
-                                </span>
+                                  <span style={{ fontFamily: 'monospace' }}>
+                                    Worker: {inv.worker.slice(0,6)}...{inv.worker.slice(-6)}
+                                  </span>
+                                  {isUnpaid && (
+                                    <button
+                                      onClick={() => handlePayInvoice(inv.id)}
+                                      disabled={isPayingInvoice}
+                                      style={{
+                                        background: 'linear-gradient(135deg, #00f5d4 0%, #00c4a7 100%)',
+                                        border: 'none', color: '#06040d',
+                                        padding: '7px 16px', borderRadius: '8px',
+                                        fontWeight: 800, cursor: 'pointer', fontSize: '12px',
+                                        fontFamily: 'var(--font-outfit)',
+                                        display: 'flex', alignItems: 'center', gap: '5px',
+                                        boxShadow: '0 2px 10px rgba(0,245,212,0.35)',
+                                        opacity: isPayingInvoice ? 0.6 : 1
+                                      }}
+                                    >
+                                      <Zap size={13} />
+                                      Pay Now
+                                    </button>
+                                  )}
+                                  {isPending && (
+                                    <span style={{
+                                      display: 'flex', alignItems: 'center', gap: '4px',
+                                      fontSize: '10px', fontWeight: 700, color: sc.color,
+                                      background: sc.bg, padding: '4px 10px', borderRadius: '6px'
+                                    }}>
+                                      <RefreshCw size={10} />
+                                      Processing...
+                                    </span>
+                                  )}
+                                  {isPaid && (
+                                    <span style={{
+                                      display: 'flex', alignItems: 'center', gap: '4px',
+                                      fontSize: '10px', fontWeight: 700, color: sc.color,
+                                      background: sc.bg, padding: '4px 10px', borderRadius: '6px'
+                                    }}>
+                                      <CheckCircle size={10} />
+                                      Payment Sent
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                              <span style={{ fontSize: '14px', fontWeight: 800, color: '#fff' }}>
-                                ${inv.amountUsdc.toLocaleString()} USDC
-                              </span>
-                            </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-                            <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                              {inv.description}
-                            </div>
-
-                            <div style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              fontSize: '10px',
-                              color: 'var(--text-dim)',
-                              borderTop: '1px solid rgba(255,255,255,0.03)',
-                              paddingTop: '6px'
-                            }}>
-                              <span>
-                                {isWorker ? `Client: ${inv.client.slice(0,6)}...${inv.client.slice(-6)}` : `Worker: ${inv.worker.slice(0,6)}...${inv.worker.slice(-6)}`}
-                              </span>
-                              {!isWorker && isUnpaid && (
-                                <button
-                                  onClick={() => handlePayInvoice(inv.id)}
-                                  disabled={isPayingInvoice}
-                                  style={{
-                                    background: 'var(--success-color)',
-                                    border: 'none',
-                                    color: '#06040d',
-                                    padding: '7px 14px',
-                                    borderRadius: '8px',
-                                    fontWeight: 800,
-                                    cursor: 'pointer',
-                                    fontSize: '12px',
-                                    fontFamily: 'var(--font-outfit)',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '5px'
-                                  }}
-                                >
-                                  <Zap size={13} />
-                                  Pay Now
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
+                  {/* SENT (Worker) Invoices Panel */}
+                  {invoiceFeedTab === 'sent' && (
+                    <div>
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        marginBottom: '10px', paddingBottom: '8px',
+                        borderBottom: '1px solid rgba(157,78,221,0.15)'
+                      }}>
+                        <div style={{
+                          width: '6px', height: '6px', borderRadius: '50%',
+                          background: 'var(--purple-accent)',
+                          boxShadow: '0 0 6px var(--purple-accent)'
+                        }} />
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--purple-light)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                          Invoices You've Sent
+                        </span>
+                        <span style={{ fontSize: '10px', color: 'var(--text-dim)', marginLeft: 'auto' }}>
+                          You are the worker
+                        </span>
+                      </div>
+                      {workerInvoices.length === 0 ? (
+                        <div style={{
+                          padding: '28px 12px', textAlign: 'center',
+                          background: 'rgba(157,78,221,0.02)',
+                          borderRadius: '12px',
+                          border: '1px dashed rgba(157,78,221,0.15)',
+                          color: 'var(--text-dim)', fontSize: '12px'
+                        }}>
+                          <ArrowUpRight size={24} style={{ color: 'rgba(157,78,221,0.25)', marginBottom: '8px' }} />
+                          <div>No sent invoices found.</div>
+                          <div style={{ fontSize: '10px', marginTop: '4px', opacity: 0.7 }}>Invoices you create will appear here.</div>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '400px', overflowY: 'auto', paddingRight: '4px' }}>
+                          {workerInvoices.map((inv) => {
+                            const sc = getStatusConfig(inv.status);
+                            const isPaid = sc.label === 'Paid';
+                            const isPending = sc.label === 'Pending';
+                            const isUnpaid = sc.label === 'Unpaid';
+                            return (
+                              <div key={inv.id} style={{
+                                background: 'linear-gradient(135deg, rgba(157,78,221,0.05) 0%, rgba(10,6,22,0.7) 100%)',
+                                border: `1px solid rgba(157,78,221,0.2)`,
+                                borderLeft: `4px solid var(--purple-accent)`,
+                                borderRadius: '14px', padding: '14px',
+                                display: 'flex', flexDirection: 'column', gap: '10px',
+                                opacity: isPaid ? 0.7 : 1, transition: 'opacity 0.2s'
+                              }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                    <span style={{
+                                      fontSize: '11px', fontWeight: 800, letterSpacing: '0.05em',
+                                      color: isPaid ? 'var(--text-secondary)' : '#fff',
+                                      textDecoration: isPaid ? 'line-through' : 'none'
+                                    }}>INVOICE #{inv.id}</span>
+                                    <span style={{
+                                      display: 'inline-flex', alignItems: 'center', gap: '4px',
+                                      padding: '3px 8px', borderRadius: '20px', fontSize: '9px', fontWeight: 800,
+                                      background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`,
+                                      width: 'fit-content'
+                                    }}>
+                                      {isPaid && <CheckCircle size={8} />}
+                                      {isPending && <RefreshCw size={8} />}
+                                      {isUnpaid && <Zap size={8} />}
+                                      {sc.label}
+                                    </span>
+                                  </div>
+                                  <div style={{ textAlign: 'right' }}>
+                                    <div style={{ fontSize: '18px', fontWeight: 800, color: isPaid ? sc.color : '#fff' }}>
+                                      ${inv.amountUsdc.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </div>
+                                    <div style={{ fontSize: '9px', color: 'var(--purple-light)', fontWeight: 700 }}>USDC</div>
+                                  </div>
+                                </div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                                  {inv.description}
+                                </div>
+                                <div style={{
+                                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                  fontSize: '10px', color: 'var(--text-dim)',
+                                  borderTop: '1px solid rgba(157,78,221,0.15)', paddingTop: '8px'
+                                }}>
+                                  <span style={{ fontFamily: 'monospace' }}>
+                                    Client: {inv.client.slice(0,6)}...{inv.client.slice(-6)}
+                                  </span>
+                                  {isPaid && (
+                                    <span style={{
+                                      display: 'flex', alignItems: 'center', gap: '4px',
+                                      fontSize: '10px', fontWeight: 700, color: sc.color,
+                                      background: sc.bg, padding: '4px 10px', borderRadius: '6px'
+                                    }}>
+                                      <CheckCircle size={10} />
+                                      Payment Received
+                                    </span>
+                                  )}
+                                  {isPending && (
+                                    <span style={{
+                                      display: 'flex', alignItems: 'center', gap: '4px',
+                                      fontSize: '10px', fontWeight: 700, color: sc.color,
+                                      background: sc.bg, padding: '4px 10px', borderRadius: '6px'
+                                    }}>
+                                      <RefreshCw size={10} />
+                                      Awaiting Payment...
+                                    </span>
+                                  )}
+                                  {isUnpaid && (
+                                    <span style={{
+                                      display: 'flex', alignItems: 'center', gap: '4px',
+                                      fontSize: '10px', fontWeight: 700, color: 'var(--text-dim)',
+                                      background: 'rgba(255,255,255,0.04)', padding: '4px 10px', borderRadius: '6px',
+                                      border: '1px solid rgba(255,255,255,0.06)'
+                                    }}>
+                                      <Zap size={10} />
+                                      Pending Client
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
