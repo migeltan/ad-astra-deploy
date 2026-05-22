@@ -1,4 +1,4 @@
-# Kwagee <img src="3.png" width="36"/>
+# Kwagee <img src="images/3.png" width="36"/>
 ###  **Kwagee: Owl You Need!**
 
 > A Stellar-powered payroll and on-chain budgeting platform built for Filipino freelancers and remote workers — settling international payments in seconds, converting funds transparently, and automatically distributing them across customizable budget wallets for rent, bills, taxes, SSS, and PhilHealth.
@@ -28,7 +28,7 @@ Kwagee solves the broken cross-border payroll experience by letting Filipino fre
 
 ## 👥 **Target Users**
 
-| User | Location | Why They Care |
+| User Personas | Location | Why They Care |
 |------|----------|---------------|
 | Filipino freelancers & remote workers | Quezon City, Manila, Cebu City | Delayed transfers, hidden fees, and missing HR support create unstable cash flow and skipped government contributions |
 | International employers & startup teams | Global (Canada, Singapore, SEA) | Need a faster, lower-cost, and more reliable payroll system for managing overseas contractors |
@@ -58,27 +58,18 @@ Kwagee solves the broken cross-border payroll experience by letting Filipino fre
 ---
 
 ## 🛠️ **Tech Stack**
-- Frontend: Node.js (v18+), React + Vite
-- Backend: Rust
-- Blockchain: Stellar (Soroban / Stellar SDK), Soroban CLI
-- Other Tools: Freighter Wallet, Cargo (for contract testing)
-
----
-
-## 📝 **Prerequisites**
-
-- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
-- [Soroban CLI](https://soroban.stellar.org/docs/getting-started/setup) `v22.x`
-- [Node.js](https://nodejs.org/) `v18+` (for frontend)
-- [Freighter Wallet](https://www.freighter.app/) browser extension
+- Frontend: [Node.js](https://nodejs.org/) `v18+` (for frontend), React + Vite
+- Backend: [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
+- Blockchain: [Soroban CLI](https://soroban.stellar.org/docs/getting-started/setup) `v22.x`, Stellar
+- Other Tools: [Freighter Wallet](https://www.freighter.app/) browser extension, Cargo (for contract testing)
 
 ---
 
 ## 🚀 **How to Run Locally**
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/kwagee
-cd kwagee
+git clone https://github.com/isidrojp24/ad-astra
+cd ad-astra/frontend
 ```
 
 ```bash
@@ -88,27 +79,10 @@ npm run dev
 ```
 
 ```bash
-# To build and test the Soroban smart contracts
-cd contracts
+## Build and test the Soroban smart contract
+git clone https://github.com/isidrojp24/ad-astra
+cd ad-astra/feature/smart-contract
 soroban contract build
-cargo test
-```
-
----
-
-## Build
-
-```bash
-git clone https://github.com/your-org/kwagee
-cd kwagee/contracts
-soroban contract build
-```
-
----
-
-## Test
-
-```bash
 cargo test
 ```
 
@@ -151,21 +125,21 @@ soroban contract invoke \
 
 ---
 
-## 🌐 Deployment
+## 🌐 **Deployment**
 **Testnet**
-- Contract / App Address: CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO
-- Link: https://stellar.expert/explorer/testnet/contract/CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO
-<img src="Stellar Testnet.png" alt="Alt Text" width="500"/>
-
-
+- Contract / App Address: `CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO`
+- 📸 Stellar Expert (Testnet)
+<img src="images/Stellar Testnet.png" alt="Stellar Test Address" width="100%"/>
 
 **Mainnet**
 - Contract / App Address:
 
 **Demo**
-- Live App:
-- Demo Video:
-- Pitch Deck: 
+- Live App: [Kwagee](https://migeltan.github.io/ad-astra-deploy/)
+- Demo Video: [Kwagee - Ad Astra Demo Video](https://youtu.be/JTWlvHUGsSQ)
+- Pitch Deck: [Ad Astra Presentation](https://canva.link/kwageebyadastra)
+
+---
 
 ## Optional Edge (Bonus)
 
@@ -179,11 +153,11 @@ soroban contract invoke \
 
 | Name | Role | Github |
 |------|------|--------|
-| Isidro, James Patrick | Stellar Integration Lead | 
-| Hernandez, Harold Benedict | Project Manager |
-| Nuesca, Geena Mae | Frontend & UI Developer | @eenami
-| Tan, Migel | Product, Documentation & GitHub Lead |
-| Villegas, Kezia Lorein | Smart Contract & Soroban Lead |
+| Isidro, James Patrick | Stellar Integration Lead | [@isidrojp24](https://github.com/isidrojp24) |
+| Hernandez, Harold Benedict | Project Manager | [@benhrnndz](https://github.com/benhrnndz) |
+| Nuesca, Geena Mae | Frontend & UI Developer | [@eenami](https://github.com/eenami) |
+| Tan, Migel | Product, Documentation & GitHub Lead | [@migeltan](https://github.com/migeltan) |
+| Villegas, Kezia Lorein | Smart Contract & Soroban Lead | [@kezein](https://github.com/kezein) |
 
 ---
 
