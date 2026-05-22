@@ -153,7 +153,10 @@ soroban contract invoke \
 
 ## 🌐 Deployment
 **Testnet**
-- Contract / App Address:
+- Contract / App Address: CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO
+- Link: https://stellar.expert/explorer/testnet/contract/CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO
+
+
 
 **Mainnet**
 - Contract / App Address:
