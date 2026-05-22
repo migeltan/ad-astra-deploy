@@ -68,8 +68,8 @@ Kwagee solves the broken cross-border payroll experience by letting Filipino fre
 ## 🚀 **How to Run Locally**
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/kwagee
-cd kwagee
+git clone https://github.com/isidrojp24/ad-astra
+cd ad-astra
 ```
 
 ```bash
@@ -90,8 +90,8 @@ cargo test
 ## Build
 
 ```bash
-git clone https://github.com/your-org/kwagee
-cd kwagee/contracts
+git clone https://github.com/isidrojp24/ad-astra
+cd ad-astra/feature/smart-contract
 soroban contract build
 ```
 
