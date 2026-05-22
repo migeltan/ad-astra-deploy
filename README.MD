@@ -142,9 +142,9 @@ soroban contract invoke \
 
 ---
 
-## 🌐 Deployment
+## 🌐 **Deployment**
 **Testnet**
-- Contract / App Address: <CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO>
+- Contract / App Address: CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO
 - Link: https://stellar.expert/explorer/testnet/contract/CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO
 <img src="images/Stellar Testnet.png" alt="Stellar Test Address" width="100%"/>
 
@@ -155,6 +155,8 @@ soroban contract invoke \
 - Live App: [Kwagee](https://migeltan.github.io/ad-astra-deploy/)
 - Demo Video: [Kwagee - Ad Astra Demo Video](https://youtu.be/JTWlvHUGsSQ)
 - Pitch Deck: [Ad Astra Presentation](https://canva.link/kwageebyadastra)
+
+---
 
 ## Optional Edge (Bonus)
 
