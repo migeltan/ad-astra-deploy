@@ -78,13 +78,6 @@ npm install
 npm run dev
 ```
 
-```bash
-# To build and test the Soroban smart contracts
-cd contracts
-soroban contract build
-cargo test
-```
-
 ---
 
 ## Build
