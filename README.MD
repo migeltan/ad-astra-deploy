@@ -155,7 +155,7 @@ soroban contract invoke \
 **Testnet**
 - Contract / App Address: CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO
 - Link: https://stellar.expert/explorer/testnet/contract/CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO
-<img src="Stellar Testnet.png" alt="Alt Text" width="500"/>
+<img src="images/Stellar Testnet.png" alt="Alt Text" width="500"/>
 
 
 
