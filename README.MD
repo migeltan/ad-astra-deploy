@@ -152,9 +152,9 @@ soroban contract invoke \
 - Contract / App Address:
 
 **Demo**
-- Live App: https://migeltan.github.io/ad-astra-deploy/
-- Demo Video: https://youtu.be/JTWlvHUGsSQ
-- Pitch Deck: https://canva.link/kwageebyadastra
+- Live App: [Kwagee](https://migeltan.github.io/ad-astra-deploy/)
+- Demo Video: [Kwagee - Ad Astra Demo Video](https://youtu.be/JTWlvHUGsSQ)
+- Pitch Deck: [Ad Astra Presentation](https://canva.link/kwageebyadastra)
 
 ## Optional Edge (Bonus)
 
