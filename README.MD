@@ -69,7 +69,7 @@ Kwagee solves the broken cross-border payroll experience by letting Filipino fre
 ```bash
 # Clone the repository
 git clone https://github.com/isidrojp24/ad-astra
-cd ad-astra
+cd ad-astra/frontend
 ```
 
 ```bash
