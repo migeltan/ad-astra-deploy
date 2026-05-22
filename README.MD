@@ -153,7 +153,7 @@ soroban contract invoke \
 
 **Demo**
 - Live App: https://migeltan.github.io/ad-astra-deploy/
-- Demo Video: 
+- Demo Video: https://youtu.be/JTWlvHUGsSQ
 - Pitch Deck: https://canva.link/kwageebyadastra
 
 ## Optional Edge (Bonus)
