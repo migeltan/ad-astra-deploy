@@ -58,19 +58,10 @@ Kwagee solves the broken cross-border payroll experience by letting Filipino fre
 ---
 
 ## 🛠️ **Tech Stack**
-- Frontend: Node.js (v18+), React + Vite
-- Backend: Rust
-- Blockchain: Stellar (Soroban / Stellar SDK), Soroban CLI
-- Other Tools: Freighter Wallet, Cargo (for contract testing)
-
----
-
-## 📝 **Prerequisites**
-
-- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
-- [Soroban CLI](https://soroban.stellar.org/docs/getting-started/setup) `v22.x`
-- [Node.js](https://nodejs.org/) `v18+` (for frontend)
-- [Freighter Wallet](https://www.freighter.app/) browser extension
+- Frontend: [Node.js](https://nodejs.org/) `v18+` (for frontend), React + Vite
+- Backend: [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
+- Blockchain: [Soroban CLI](https://soroban.stellar.org/docs/getting-started/setup) `v22.x`, Stellar
+- Other Tools: [Freighter Wallet](https://www.freighter.app/) browser extension, Cargo (for contract testing)
 
 ---
 
