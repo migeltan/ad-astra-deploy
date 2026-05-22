@@ -78,21 +78,11 @@ npm install
 npm run dev
 ```
 
----
-
-## Build
-
 ```bash
+## Build and test the Soroban smart contract
 git clone https://github.com/isidrojp24/ad-astra
 cd ad-astra/feature/smart-contract
 soroban contract build
-```
-
----
-
-## Test
-
-```bash
 cargo test
 ```
 
