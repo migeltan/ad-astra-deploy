@@ -144,7 +144,7 @@ soroban contract invoke \
 
 ## 🌐 Deployment
 **Testnet**
-- Contract / App Address: CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO
+- Contract / App Address: <CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO>
 - Link: https://stellar.expert/explorer/testnet/contract/CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO
 <img src="images/Stellar Testnet.png" alt="Stellar Test Address" width="100%"/>
 
@@ -168,11 +168,11 @@ soroban contract invoke \
 
 | Name | Role | Github |
 |------|------|--------|
-| Isidro, James Patrick | Stellar Integration Lead | @isidrojp24 |
-| Hernandez, Harold Benedict | Project Manager | @benhrnndz |
-| Nuesca, Geena Mae | Frontend & UI Developer | @eenami |
-| Tan, Migel | Product, Documentation & GitHub Lead | @migeltan |
-| Villegas, Kezia Lorein | Smart Contract & Soroban Lead | @kezein |
+| Isidro, James Patrick | Stellar Integration Lead | [@isidrojp24](https://github.com/isidrojp24) |
+| Hernandez, Harold Benedict | Project Manager | [@benhrnndz](https://github.com/benhrnndz) |
+| Nuesca, Geena Mae | Frontend & UI Developer | [@eenami](https://github.com/eenami) |
+| Tan, Migel | Product, Documentation & GitHub Lead | [@migeltan](https://github.com/migeltan) |
+| Villegas, Kezia Lorein | Smart Contract & Soroban Lead | [@kezein](https://github.com/kezein) |
 
 ---
 
