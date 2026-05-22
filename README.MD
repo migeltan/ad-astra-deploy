@@ -1,23 +1,41 @@
-# Kwagee 
-### *Owl You Need!*
+# Kwagee <img src="images/3.png" width="36"/>
+###  **Kwagee: Owl You Need!**
 
 > A Stellar-powered payroll and on-chain budgeting platform built for Filipino freelancers and remote workers — settling international payments in seconds, converting funds transparently, and automatically distributing them across customizable budget wallets for rent, bills, taxes, SSS, and PhilHealth.
 
 ---
 
-## Problem
-
-Harold, a 20-year-old freelance video editor in Makati City contracting for clients in SEA, watches his electric bill lapse for the third consecutive month because SWIFT delays, hidden exchange spreads, and platform fees quietly drain his transfer before it arrives — leaving him too short to cover utilities and a PhilHealth contribution he's been deferring since January, manually reconciling invoices for BIR filings with no HR support, no fixed payroll cycle, and no margin for error in a global payment system that was never built for him.
+## 🧩 **Problem**
+Filipino freelancers and remote worker face several financial instability due to traditional cross-border payment systems. Workers experience:
+- Delays and High Platform Fees
+- Hidden Exchange Spreads
+- Lack of HR Support
+- Skipped Government Contributions
 
 ---
 
-## Solution
+## ✨ **Vision**
+Kwagee takes its name from *Kuwago* — the Filipino word for owl, a symbol of wisdom, wealth, and awareness. The platform is proudly rooted in Philippine culture, built to give the country's growing class of digital workers the financial infrastructure they deserve: fast, transparent, automated, and entirely on-chain. By anchoring Kwagee to the Stellar ecosystem, we bridge the gap between traditional remittance finance and the programmable financial future — one paycheck at a time.
 
+**Kwagee – Own Your Financial Flight**
+
+---
+
+## 🎯 **Purpose**
 Kwagee solves the broken cross-border payroll experience by letting Filipino freelancers receive client payments directly in XLM or USDC on the Stellar blockchain, instantly converting funds to Philippine Peso at transparent rates, and automatically distributing them across customizable on-chain budget wallets — covering rent, bills, taxes, SSS, PhilHealth, and savings — all settled in seconds, at near-zero cost, with no SWIFT delays, no hidden fees, and no HR department required.
 
 ---
 
-## Stellar Features Used
+## 👥 **Target Users**
+
+| User Personas | Location | Why They Care |
+|------|----------|---------------|
+| Filipino freelancers & remote workers | Quezon City, Manila, Cebu City | Delayed transfers, hidden fees, and missing HR support create unstable cash flow and skipped government contributions |
+| International employers & startup teams | Global (Canada, Singapore, SEA) | Need a faster, lower-cost, and more reliable payroll system for managing overseas contractors |
+
+---
+
+## 💎 **Features**
 
 - **Stellar USDC / XLM transfers** — lightning-fast 3–5 second cross-border invoice settlement for fractions of a cent
 - **Soroban smart contracts** — manages active invoice registries, tracks user-defined allocation weights, and stores funding states on-chain
@@ -27,16 +45,7 @@ Kwagee solves the broken cross-border payroll experience by letting Filipino fre
 
 ---
 
-## Target Users
-
-| User | Location | Why They Care |
-|------|----------|---------------|
-| Filipino freelancers & remote workers | Quezon City, Manila, Cebu City | Delayed transfers, hidden fees, and missing HR support create unstable cash flow and skipped government contributions |
-| International employers & startup teams | Global (Canada, Singapore, SEA) | Need a faster, lower-cost, and more reliable payroll system for managing overseas contractors |
-
----
-
-## Core Feature (MVP)
+## 💎 **Core Feature (MVP)**
 
 **Invoice → On-Chain Split → Wallet Distribution**
 
@@ -48,60 +57,38 @@ Kwagee solves the broken cross-border payroll experience by letting Filipino fre
 
 ---
 
-## Vision & Purpose
-
-Kwagee takes its name from *Kuwago* — the Filipino word for owl, a symbol of wisdom, wealth, and awareness. The platform is proudly rooted in Philippine culture, built to give the country's growing class of digital workers the financial infrastructure they deserve: fast, transparent, automated, and entirely on-chain. By anchoring Kwagee to the Stellar ecosystem, we bridge the gap between traditional remittance finance and the programmable financial future — one paycheck at a time.
-
-**Kwagee – Own Your Financial Flight**
-
----
-
-## Why This Wins
-
-Kwagee targets a massive, underserved real-world segment — Filipino freelancers generating billions in annual cross-border income — and demonstrates Stellar's composability through a full PayFi workflow: cross-border settlement, on-chain budgeting, and automated government contribution scheduling, all in a single demo-able flow. It directly addresses Stellar's Stablecoins & PayFi and MSME Commerce tracks while grounding every design decision in a human story judges can immediately understand.
+## 🛠️ **Tech Stack**
+- Frontend: [Node.js](https://nodejs.org/) `v18+` (for frontend), React + Vite
+- Backend: [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
+- Blockchain: [Soroban CLI](https://soroban.stellar.org/docs/getting-started/setup) `v22.x`, Stellar
+- Other Tools: [Freighter Wallet](https://www.freighter.app/) browser extension, Cargo (for contract testing)
 
 ---
 
-## Team
-
-| Name | Role |
-|------|------|
-| Isidro, James Patrick | Stellar Integration Lead |
-| Hernandez, Harold Benedict | Project Manager |
-| Nuesca, Geena Mae | Frontend & UI Developer |
-| Tan, Migel | Product, Documentation & GitHub Lead |
-| Villegas, Kezia Lorein | Smart Contract & Soroban Lead |
-
----
-
-## Prerequisites
-
-- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
-- [Soroban CLI](https://soroban.stellar.org/docs/getting-started/setup) `v22.x`
-- [Node.js](https://nodejs.org/) `v18+` (for frontend)
-- [Freighter Wallet](https://www.freighter.app/) browser extension
-
----
-
-## Build
-
+## 🚀 **How to Run Locally**
 ```bash
-git clone https://github.com/your-org/kwagee
-cd kwagee/contracts
-soroban contract build
+# Clone the repository
+git clone https://github.com/isidrojp24/ad-astra
+cd ad-astra/frontend
 ```
 
----
-
-## Test
+```bash
+# Install frontend dependencies
+npm install
+npm run dev
+```
 
 ```bash
+## Build and test the Soroban smart contract
+git clone https://github.com/isidrojp24/ad-astra
+cd ad-astra/feature/smart-contract
+soroban contract build
 cargo test
 ```
 
 ---
 
-## Deploy to Testnet
+## 📡 **Deploy to Testnet**
 
 ```bash
 soroban contract deploy \
@@ -138,6 +125,24 @@ soroban contract invoke \
 
 ---
 
+## 🌐 **Deployment**
+**Testnet**
+- Contract / App Address: `CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO`
+- 📸 Stellar Expert (Testnet)
+<img src="images/Stellar Testnet.png" alt="Stellar Test Address" width="100%"/>
+
+**Mainnet**
+- Contract / App Address: `CDDLPVGLVT4QEQXNS4K7VAVRVIIGEBQTZXNQU6H2JJYCNBC563WHLRKY`
+- 📸 Stellar Expert (Mainnet)
+<img src="images/Stellar Mainnet.png" alt="Stellar Test Address" width="100%"/>
+
+**Demo**
+- Live App: [Kwagee](https://migeltan.github.io/ad-astra-deploy/)
+- Demo Video: [Kwagee - Ad Astra Demo Video](https://youtu.be/JTWlvHUGsSQ)
+- Pitch Deck: [Ad Astra Presentation](https://canva.link/kwageebyadastra)
+
+---
+
 ## Optional Edge (Bonus)
 
 - **Local anchor integration** — PDAX off-ramp for real-time PHP conversion on fund arrival
@@ -146,15 +151,26 @@ soroban contract invoke \
 
 ---
 
-## Timeline
+## 🧑‍💻 **Team**
+
+| Name | Role | Github |
+|------|------|--------|
+| Isidro, James Patrick | Stellar Integration Lead | [@isidrojp24](https://github.com/isidrojp24) |
+| Hernandez, Harold Benedict | Project Manager | [@benhrnndz](https://github.com/benhrnndz) |
+| Nuesca, Geena Mae | Frontend & UI Developer | [@eenami](https://github.com/eenami) |
+| Tan, Migel | Product, Documentation & GitHub Lead | [@migeltan](https://github.com/migeltan) |
+| Villegas, Kezia Lorein | Smart Contract & Soroban Lead | [@kezein](https://github.com/kezein) |
+
+---
+
+## ⏰ **Timeline**
 
 | Phase | Milestone |
 |-------|-----------|
+| Day 0 | Brainstorming |
 | Day 1 | Soroban contract scaffold, invoice registry, allocation logic |
 | Day 2 | Freighter Wallet integration, frontend split-dashboard |
 | Day 3 | USDC payment flow, multi-destination disbursement |
-| Day 4 | PDAX anchor integration, BIR reconciliation export |
-| Day 5 | End-to-end testing, testnet deployment, demo prep |
 
 ---
 
