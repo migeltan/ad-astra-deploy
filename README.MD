@@ -129,7 +129,7 @@ soroban contract invoke \
 **Testnet**
 - Contract / App Address: `CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO`
 - 📸 Stellar Expert (Testnet)
-![Testnet Screenshot](<img src="images/Stellar Testnet.png" alt="Stellar Test Address" width="100%"/>)
+<img src="images/Stellar Testnet.png" alt="Stellar Test Address" width="100%"/>
 
 **Mainnet**
 - Contract / App Address:
