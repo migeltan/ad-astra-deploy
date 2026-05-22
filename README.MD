@@ -132,7 +132,9 @@ soroban contract invoke \
 <img src="images/Stellar Testnet.png" alt="Stellar Test Address" width="100%"/>
 
 **Mainnet**
-- Contract / App Address:
+- Contract / App Address: `CDDLPVGLVT4QEQXNS4K7VAVRVIIGEBQTZXNQU6H2JJYCNBC563WHLRKY`
+- 📸 Stellar Expert (Mainnet)
+<img src="images/Stellar Mainnet.png" alt="Stellar Test Address" width="100%"/>
 
 **Demo**
 - Live App: [Kwagee](https://migeltan.github.io/ad-astra-deploy/)
