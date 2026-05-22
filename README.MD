@@ -157,15 +157,13 @@ soroban contract invoke \
 - Link: https://stellar.expert/explorer/testnet/contract/CDQFBGQJKBREW5NCQDWV277PHCFI4WYVYGW26FHOZ4JBTO5PSRGQ4FVO
 <img src="images/Stellar Testnet.png" alt="Stellar Test Address" width="100%"/>
 
-
-
 **Mainnet**
 - Contract / App Address:
 
 **Demo**
-- Live App:
-- Demo Video:
-- Pitch Deck: 
+- Live App: https://migeltan.github.io/ad-astra-deploy/
+- Demo Video: 
+- Pitch Deck: https://canva.link/kwageebyadastra
 
 ## Optional Edge (Bonus)
 
@@ -179,11 +177,11 @@ soroban contract invoke \
 
 | Name | Role | Github |
 |------|------|--------|
-| Isidro, James Patrick | Stellar Integration Lead | 
-| Hernandez, Harold Benedict | Project Manager |
-| Nuesca, Geena Mae | Frontend & UI Developer | @eenami
-| Tan, Migel | Product, Documentation & GitHub Lead |
-| Villegas, Kezia Lorein | Smart Contract & Soroban Lead |
+| Isidro, James Patrick | Stellar Integration Lead | @isidrojp24 |
+| Hernandez, Harold Benedict | Project Manager | @benhrnndz |
+| Nuesca, Geena Mae | Frontend & UI Developer | @eenami |
+| Tan, Migel | Product, Documentation & GitHub Lead | @migeltan |
+| Villegas, Kezia Lorein | Smart Contract & Soroban Lead | @kezein |
 
 ---
 
