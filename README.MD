@@ -28,7 +28,7 @@ Kwagee solves the broken cross-border payroll experience by letting Filipino fre
 
 ## 👥 **Target Users**
 
-| User | Location | Why They Care |
+| User Personas | Location | Why They Care |
 |------|----------|---------------|
 | Filipino freelancers & remote workers | Quezon City, Manila, Cebu City | Delayed transfers, hidden fees, and missing HR support create unstable cash flow and skipped government contributions |
 | International employers & startup teams | Global (Canada, Singapore, SEA) | Need a faster, lower-cost, and more reliable payroll system for managing overseas contractors |
